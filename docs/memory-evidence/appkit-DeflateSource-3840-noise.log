@@ -1,0 +1,27 @@
+baseline: result=0 footprint_MiB=8.375686645507812 rss_MiB=34.796875 peak_footprint_MiB=8.391311645507812
+after_png_copy: result=0 footprint_MiB=36.203857421875 rss_MiB=91.015625 peak_footprint_MiB=63.703880310058594
+child_status=0 reader_elapsed=1.652398459 seconds
+reader bytes=28469172 metadata={
+    ColorModel = RGB;
+    Depth = 8;
+    HasAlpha = 1;
+    Orientation = 1;
+    PixelHeight = 2160;
+    PixelWidth = 3840;
+    ProfileName = "sRGB IEC61966-2.1";
+    "{Exif}" =     {
+        PixelXDimension = 3840;
+        PixelYDimension = 2160;
+    };
+    "{TIFF}" =     {
+        Compression = 8;
+        Orientation = 1;
+        PhotometricInterpretation = 2;
+        ResolutionUnit = 2;
+    };
+}
+
+after_tiff_reader_exit: result=0 footprint_MiB=93.90705108642578 rss_MiB=148.90625 peak_footprint_MiB=98.36015319824219
+after_tiff_settled: result=0 footprint_MiB=93.90705108642578 rss_MiB=148.90625 peak_footprint_MiB=98.36015319824219
+after_clipboard_clear: result=0 footprint_MiB=66.703857421875 rss_MiB=94.203125 peak_footprint_MiB=98.36015319824219
+after_service_release: result=0 footprint_MiB=66.656982421875 rss_MiB=94.15625 peak_footprint_MiB=98.36015319824219

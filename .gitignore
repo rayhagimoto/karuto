@@ -1,0 +1,7 @@
+.build/
+dist/
+stitcher/target/
+.DS_Store
+*.xcuserstate
+
+docs/research

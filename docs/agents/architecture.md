@@ -1,0 +1,58 @@
+# Alpha implementation coordination
+
+Start with `docs/implementation-plan.md`. All capture target geometry crossing modules uses global AppKit screen points, bottom-left origin. Only Capture converts into ScreenCaptureKit coordinates. Shared models are in `Sources/ScreenshotX/Shared/CaptureModels.swift` and owned by the orchestrator.
+
+## File ownership
+
+- Capture agent: `Sources/ScreenshotX/Capture/`, `Tests/ScreenshotXTests/Capture*`.
+- UI agent: `Sources/ScreenshotX/UI/`, `Tests/ScreenshotXTests/UI*`.
+- Appshots agent: `stitcher/`, `Sources/CStitcher/`, `Sources/ScreenshotX/Appshots/`, `Tests/ScreenshotXTests/Stitch*`.
+- Orchestrator: Shared, App, Storage, entry point, Package.swift, scripts, Resources, integration tests and documentation.
+
+No agent edits another owner's files. Propose interface changes to the orchestrator. Compile errors in another module should be reported, not repaired without reassignment. Use only public Apple APIs. No browser plugin, browser runtime, browser automation, network client, telemetry, or image editor.
+
+## Capture engine contract
+
+`@MainActor final class CaptureEngine` has `init()`, `catalog() async throws -> CaptureCatalog`, `capture(target: CaptureTarget, options: ScreenshotOptions) async throws -> CGImage`, `startRecording(target: CaptureTarget, options: RecordingOptions, to: URL) async throws`, `stopRecording() async throws -> RecordingResult`, `startFrames(target: CaptureTarget, onFrame: @escaping @Sendable (PixelFrame) -> Void) async throws`, `stopFrames() async`. Start recording resolves after its delegate reports started; stop resolves after file finalization. `var onFailure: ((Error) -> Void)?` delivers asynchronous stream failures on MainActor. Frame callback is synchronous on a dedicated serial queue, at most five frames/second, with bounded work and no unbounded Tasks. Self-owned capture panels, controls, and previews are excluded from all capture paths. Preferences is the explicit exception: the coordinator supplies SettingsController.captureWindowIDs to CaptureEngine.capturableOwnWindowIDs. The filter excludes the app while including only matching self-owned allowlisted windows, and window selection uses the same ownership policy. Permission errors must be understandable; no settings changes are automated.
+
+## UI contract
+
+`@MainActor final class CaptureUIController`: `init()`, `var onCapture: ((CaptureMode, CaptureTarget) -> Void)?`, `var onCancel: (() -> Void)?`, `present(catalog: CaptureCatalog, initialMode: CaptureMode = .area, frozenFrames: [UInt32: CGImage] = [:])`, `dismiss()`. Area target rect is global AppKit points. Window IDs come from catalog; select by actual frontmost hit. In Recording mode support area/display/window through a small target-kind choice. Area accepts the first mouse-down even while the toolbar is key, and, when Instant Capture is enabled, captures once on release of a valid drag after committing the final pointer coordinates. With Instant Capture disabled it keeps the selection adjustable until Return/Capture. Dismissal and mode changes cancel pending gestures. Other modes retain Enter or Capture confirmation; manually entered area dimensions also support Return. `@MainActor final class ResultPreviewController`: `init()`, `show(_ artifact: CaptureArtifact)`, callback properties `onSave`, `onCopy`, `onReveal`, `onDismiss` of type `((CaptureArtifact) -> Void)?`; implement local file dragging and video open within UI. `@MainActor final class SessionControlsController`: `init()`, `var onStop: (() -> Void)?`, `var onCancel: (() -> Void)?`, `show(title: String, message: String, stopTitle: String)`, `update(message: String)`, `dismiss()`. This floating controller serves countdown, recording and scrolling. No settings UI is required from UI agent; orchestrator owns it.
+
+## Appshots contract
+
+`final class StitchingSession: @unchecked Sendable` owns serialization/locking and bounded state. `init(directory: URL) throws`, `append(_ frame: PixelFrame) throws -> StitchProgress`, `finish(to: URL) throws -> StitchOutput`, `cancel()`. `StitchProgress` has `height: Int`, `message: String`, `accepted: Bool`; `StitchOutput` has `width: Int`, `height: Int`. Append is synchronous, serialized by frame callback queue; finish only happens after frame stream stop, with internal locking to prevent overlap. PNG output must stream from disk-backed strips without allocating the complete output bitmap. A narrow C interface is exposed as module `CStitcher`; static library named `screenshotx_stitcher` in `stitcher/target/release`. Rust tests should verify known synthetic overlaps and failure cases. Add tests that compile independently; parent builds integrated app.
+
+## Current modules and future local features
+
+The application coordinator owns the capture lifecycle and user-visible transitions; views dispatch intent and render state. Capture owns all ScreenCaptureKit objects, permission checks, display-coordinate conversion, and stream cleanup. Storage owns local file creation and retention. Appshots owns the synchronous Swift/Rust boundary and bounded disk-backed image assembly. Shared value types carry targets, options, and finished artifacts without exposing framework capture objects to other modules.
+
+Future annotation, OCR, and background composition should consume finished `CaptureArtifact` files in separate modules. They do not belong in the frame callback or capture engine. Persistent history should extend local storage with an index rather than keep decoded images in the coordinator. Recording export/transcoding belongs after capture finalization. Add these seams when implementing the relevant feature; the alpha has no placeholder plugin system or unused service abstractions.
+
+### Clipboard and preview actions
+
+`CaptureClipboard` owns image validation and pasteboard publication. It reads encoded PNG data off the main thread, publishes PNG immediately, and supplies TIFF lazily for compatible image readers. Decoded images are not retained while idle; compressed source data remains available until pasteboard ownership ends, independent of a later Trash action. Both declared and actual image dimensions are bounded to 33,554,432 pixels (128 MiB raw RGBA); encoded source files are limited to 128 MiB. Newer copy requests supersede pending older reads. Failed input validation preserves the previous clipboard.
+
+The coordinator auto-copies image artifacts only when `autoCopyScreenshots` is enabled (default true), including scrolling screenshots. It performs automatic save and Save As file copying off the main actor. Save As uses the asynchronous system panel API; first-use system dialog startup time is not eliminated. Preview `onSave`, `onCopy`, `onReveal`, `onOpen`, and `onTrash` callbacks run after fade-out completes, so opening a dialog or another app cannot interrupt the transition. A failed action reports an error; dismissal never silently deletes a file. `onDismiss` no longer replaces the latest artifact, preventing an old preview's timer from becoming Restore Last Capture.
+
+Preview hover tracking covers the whole panel, including its controls. Leaving after entry dismisses in both persistent and timed modes; moving between child controls does not count as leaving. Hover dismissal defers during a held mouse button/file drag. Every normal removal shares the same fade-out path, disables further clicks while fading, and closes the native window after animation. An old window's hover events or animation completion must never dismiss a newer preview for the same artifact.
+
+`ResultPreviewController.show(_:autoDismissAfter:)` snapshots each preview's optional timeout. Tasks cancel on replacement, dismissal, or controller destruction and defer while the user interacts. Settings defaults to persistent previews; automatic mode defaults to five seconds, configurable from 1–300. Crowded previews overlap within the visible display; persistent previews are not evicted by newer captures. Thumbnail resolution remains bounded, but memory can grow with the number of intentionally open previews. Single-click opens through the default app, drag exports the local file, successful drop dismisses, and screenshot Trash uses the recoverable macOS Trash operation. File size is loaded independently from the bounded image thumbnail.
+
+## UI reference and review
+
+The capture toolbar is based on the all-in-one reference: charcoal rounded mode group, icon-over-label buttons, and separate width × height controls. The screenshot workflow asset depicts annotation and is not a capture-toolbar reference. Deferred features must not appear as working controls. Settings uses native grouped controls and a sidebar; it is an adaptation rather than a verified pixel-for-pixel reproduction of the reference settings.
+
+The alpha originally opened a generic settings form. That was a launch and visual-review failure. Normal launch now opens capture; settings is secondary. UI changes require checking the running app, not merely successful compilation or accessibility-tree inspection.
+
+The selection canvas establishes its capture crosshair when the overlay opens, without waiting for pointer movement. Toolbar controls retain their native cursors, and dismissal releases the capture cursor. Cursor handling must account for the toolbar being the key window while the screen-sized selection panels are not. Apple documents that [`activeAlways` tracking suppresses `cursorUpdate(with:)`](https://developer.apple.com/documentation/appkit/nstrackingarea/options-swift.struct/activealways), so adding that event flag to the existing always-active movement tracker alone is insufficient.
+
+## Frozen screenshot sessions
+
+`CaptureEngine.freezeDesktop()` obtains one shareable-content catalog and concurrently captures one image per display before showing selection UI. `FrozenDesktop` owns the catalog and immutable native-resolution images; `image(for:)` crops output from those images. Area coordinates convert using actual image-to-display scale. Frozen window output is the visible desktop region, not an isolated window; cross-display windows fail explicitly. Retained frames are limited to 256 MiB.
+
+The coordinator owns the frozen session and passes its images to the UI. It chooses frozen output only for Area, Fullscreen, and Window, releases its snapshot on dismissal/cancel/failure/completion, and never substitutes a newer live frame for frozen output. UI hides the frozen backdrop for recording, scrolling, and timer modes. Settings persists defaults via AppSettings; the overlay menu changes only a CaptureSessionPreferences value snapshot; changing Freeze Display cancels and reopens selection in the same mode. No processes, audio, or desktop state are paused. Capture timing is subject to permission/catalog and ScreenCaptureKit latency, not a hardware-keypress guarantee.
+
+## Keyboard configuration
+
+See [keymap architecture](../keymap.md) for the command registry, versioned persistence, scope ownership, global-registration rollback, recorder lifecycle, and default/session separation. Application-defined shortcuts must come from this registry; no independent hardcoded key handlers or equivalents.

@@ -1,0 +1,6 @@
+module CStitcher {
+    header "include/ScreenshotXStitcher.h"
+    link "screenshotx_stitcher"
+    link "z"
+    export *
+}
