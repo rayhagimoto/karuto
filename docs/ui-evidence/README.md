@@ -2,9 +2,11 @@
 
 [UI review criteria](../ui-review.md) · [Alpha validation](../alpha-validation.md)
 
-These images were captured from running native AppKit windows. Individual-window captures omit the surrounding desktop and may flatten the appearance of glass/vibrancy.
+The current [appearance settings](settings-appearance-current.png) and [keyboard shortcuts](settings-shortcuts-current.png) images were captured from the running app. Shortcut assignments reflect the capture configuration. Individual-window captures omit the surrounding desktop and may flatten the appearance of glass/vibrancy.
 
-- [Current capture toolbar](capture-toolbar-current.jpg): separate centered icon/label rows, padded secondary actions, thinner borders and initial fields unfocused. Production window margins are transparent; the screenshot tool uses a white matte.
+The remaining images are historical UI evidence and may not reflect the current interface.
+
+- [Earlier capture toolbar](capture-toolbar-current.jpg): separate centered icon/label rows, padded secondary actions, thinner borders and initial fields unfocused. Production window margins are transparent; the screenshot tool uses a white matte.
 - [Settings](settings.png): grouped native preferences and sidebar.
 - [Preview fixture](preview-fixture.png): production preview controller displaying the local toolbar screenshot as a wide-image fixture; this is a layout check, not a live screen-capture success claim.
 

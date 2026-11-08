@@ -1,7 +1,7 @@
-Process:         ScreenshotX [93350]
-Path:            /Users/USER/*/ScreenshotX.app/Contents/MacOS/ScreenshotX
+Process:         Karuto [93350]
+Path:            /Users/USER/*/Karuto.app/Contents/MacOS/Karuto
 Load Address:    0x102768000
-Identifier:      local.screenshotx.app
+Identifier:      local.karuto.app
 Version:         0.1.0 (1)
 Code Type:       ARM64
 Platform:        macOS

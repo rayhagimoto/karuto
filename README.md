@@ -1,54 +1,78 @@
-# ScreenshotX
+![Karuto](assets/Karuto-README-Header.png)
 
-A local-only macOS capture app. Native Swift/AppKit interface and ScreenCaptureKit capture, with a small Rust core for scrolling-image stitching. No browser extension, embedded browser, cloud storage, telemetry, or third-party runtime dependencies.
+# Karuto
 
-## Try the alpha
+A lightweight, local-first capture utility for macOS. Capture screenshots, record your screen, and stitch scrolling content in browsers or Mac apps. Karuto uses a native Swift/AppKit interface, ScreenCaptureKit, and a small Rust stitching core. No browser extension or cloud account is required.
 
-Requires macOS 15 or newer. Build with Apple's Swift tools and Rust:
+**Alpha:** Karuto is under active development.
+
+## Screenshots
+
+Current settings screens from the alpha. Shortcuts shown reflect the configuration used for the screenshot and can be customized. Window captures may flatten the glass effect.
+
+| Appearance settings | Keyboard shortcuts |
+| --- | --- |
+| ![Appearance settings](docs/ui-evidence/settings-appearance-current.png) | ![Keyboard shortcuts settings](docs/ui-evidence/settings-shortcuts-current.png) |
+
+## Features
+
+- **Screenshots:** capture an area, display, or window as PNG; use a three-second timer, repeat a previous area, and optionally include window shadows.
+- **Area suggestions:** hover over a window in Area mode for a dashed outline, then click to select its bounds. Scrolling mode suggests the accessible scrolling pane under the pointer when available and labels window-bounds fallbacks. Drag instead to draw a custom rectangle.
+- **Adjust or capture instantly:** release the mouse to capture an area immediately, or disable Instant Capture to move and resize the selection before pressing Return.
+- **Freeze the display:** select from a still image while applications and audio continue running. Choose a persistent default in settings or override it for the current capture session.
+- **Screen recording:** record an area, display, or window to H.264 MP4, with cursor, system audio, microphone, and resolution options.
+- **Scrolling capture:** automatically scroll through a visible browser or Mac app and stitch overlapping frames locally into a PNG. Initial motion checks can exclude stationary headers, footers, and sidebars; a dashed guide shows the verified moving area. Switch to manual scrolling at any time. Automatic scrolling needs Accessibility access. Unverified or ambiguous areas offer **Adjust Area**; interrupted automation can continue manually. No browser extension is needed.
+- **Capture previews:** copy, save, reveal, or trash screenshots; open a capture in its default viewer or drag it to another app. Screenshots copy to the clipboard by default. Previews can persist or disappear after a configurable delay. Moving away after hovering waits 0.5 seconds before fading out; returning during that delay or fade restores the preview.
+- **Custom shortcuts:** configure app, global, and capture shortcuts in Settings. Instant Capture and Freeze Display shortcuts are unassigned by default.
+- **Setup assistance:** open the required macOS permission pages from Settings → Setup, see current access, and optionally launch Karuto at login with only its menu bar icon visible.
+- **Local by design:** captures and stitching run on your Mac. Cloud storage and telemetry are not part of the app.
+
+## Installation
+
+Build from source on **macOS 15 or later**. Install Xcode or the Xcode Command Line Tools, a Rust toolchain with Cargo, and `librsvg` (`rsvg-convert`), then run from the project directory:
 
 ```sh
 bash scripts/build.sh
-open dist/ScreenshotX.app
+open dist/Karuto.app
 ```
 
-The build selects your Apple Development signing identity when exactly one is available. With multiple identities, set `SCREENSHOTX_SIGN_IDENTITY` to the intended certificate's SHA-1 fingerprint. Keep the same identity across builds so macOS can recognize existing privacy grants. Ad-hoc signing is available only by explicitly setting `SCREENSHOTX_SIGN_IDENTITY=-`; changed ad-hoc builds can lose permission despite an enabled Settings toggle.
+The build script automatically selects an Apple Development signing certificate if exactly one is available. If you have multiple certificates, set `KARUTO_SIGN_IDENTITY` to the SHA-1 fingerprint of the one to use. For a disposable ad-hoc build, use:
 
-After switching from an older ad-hoc build, quit ScreenshotX, remove its entry from **System Settings → Privacy & Security → Screen & System Audio Recording**, then reopen this app and grant access again. Reopen once more if macOS requests it. This is a one-time migration to the new signing identity, not a step required for every build.
+```sh
+KARUTO_SIGN_IDENTITY=- bash scripts/build.sh
+```
 
-The app opens a floating capture toolbar. Drag anywhere on the toolbar to reposition it; an ordinary click still operates the control. The options menu opens above or below its button according to available screen space. **Control–Shift–2** reopens it by default; the menu-bar icon provides settings, previous-area capture, and restore-last-capture. **Area:** drag once and release to capture by default. Open the overlay’s gear menu to turn off **Instant Capture**; then drag, move, or resize the selection and press **Return** when ready. For other modes, select a target and press **Return**. Exact area dimensions can also be entered in the toolbar and captured with **Return**. **Escape** cancels selection. Screen Recording permission is required when capturing; microphone permission is requested only when microphone recording is selected.
+Use a consistent signing identity across builds: changed ad-hoc signatures can cause macOS to lose track of previously granted screen-recording permission.
 
-- **ScreenshotX settings:** Preferences remains visible in screenshots and can be selected in Window mode; capture controls and previews remain excluded.
-- **Screenshots:** area, display, window, three-second timer, previous area; PNG output and optional window shadow.
-- **Overlay options:** **Instant Capture** and **Freeze Display During Capture** in Settings → Capture are saved defaults for new sessions. The overlay gear menu overrides them only for the current session. Freeze takes a still frame before the overlay opens; Area, Fullscreen, and Window output use those same saved pixels. Apps and audio continue underneath. Switching freeze restarts selection. Recording, scrolling, and the screenshot timer remain live.
-- **Recording:** area, display, or window; H.264 MP4, cursor option, system audio and microphone options, native or 1080p resolution; stop/cancel controls.
-- **Scrolling appshots:** select a content rectangle in an existing browser or Mac app, then manually scroll slowly downward. Overlapping frames are stitched locally into a PNG. Exclude fixed headers and sidebars from the rectangle.
-- **Results:** screenshots copy to the clipboard automatically by default; disable this in Settings → General. Videos never auto-copy. Preview actions include copy, save, reveal, and screenshot Trash. Clicking the image opens its default viewer; dragging exports the file. Actions close the preview, and its footer shows file size in B/kB/MB as appropriate. Auto-save remains optional.
+Karuto has a new app identity, so settings and privacy grants from earlier builds do not carry over automatically.
 
-Settings → General also controls preview dismissal: keep until dismissed (default), or close automatically after 1–300 seconds (initially 5). Hovering over a preview and then moving away dismisses it in either mode. The timer waits while the pointer is over the preview or a mouse button is held; a file drag finishes before hover dismissal. Every dismissal uses a short fade-out, including actions, the close button, and timeouts. Persistent previews otherwise remain available until dismissed; crowded previews overlap within the display instead of evicting older captures. Dismissing a preview does not delete its file. The Trash action moves the preview's current file to macOS Trash; Restore Last Capture does not restore trashed files. Saving closes the preview even if the save dialog is later cancelled; Restore Last Capture remains available from the menu bar.
+When prompted, allow the app under **System Settings → Privacy & Security → Screen & System Audio Recording**. Restart it if macOS requests it. Microphone permission is requested only when microphone recording is selected. If migrating from an older ad-hoc build, you may need to remove its old permission entry and grant access again.
 
-Freeze uses the earliest frames returned by macOS after permission and display discovery, not an exact keypress timestamp; separate displays are not guaranteed simultaneous. Frozen Window mode crops the visible screen region, including any occluding windows, without isolated transparency or shadows. For a window spanning displays, use Area or turn off freeze.
+Open **Settings → Setup** for buttons to Screen & System Audio Recording, Accessibility, and Microphone settings. Screen access is required for capture; Accessibility enables automatic scrolling and pane suggestions; microphone access is optional. The same section has **Launch at login** and a shortcut to macOS Login Items. If macOS requires approval, complete it there. Karuto always opens quietly with only its menu bar icon, whether launched manually or at login. Open capture through its configurable shortcut or **Open Capture Toolbar** in the menu bar menu. Keep the app in a stable location after enabling login launch.
 
-This is an alpha, not a complete commercial capture suite. Editing, annotations, OCR, background composition, GIF export, webcam overlays, recording pause/resume, and persistent capture history are deferred. Scrolling capture is conservative: animation, sticky content, repeated patterns, and fast scrolling can prevent reliable overlap detection. It captures rendered pixels; it cannot reveal unloaded or never-rendered content.
+## Getting started
 
-## Keyboard shortcuts
+1. Open the app; it stays in the menu bar. Use **Control–Shift–2** or choose **Open Capture Toolbar** from its menu bar menu. Drag anywhere on the toolbar to reposition it.
+2. Choose **Area**, then drag over the screen. By default the capture is taken when you release the mouse. With Instant Capture disabled, adjust the selection and press **Return**.
+3. Use the toolbar options menu to change Instant Capture or Freeze Display for the current session. Set defaults in Preferences.
+4. Open Preferences with **Command–comma**, or Keyboard Shortcuts with **Command–Option–comma**. These shortcuts are configurable. Press **Escape** to reset an active drag or an adjustable area selection; press it again with no selection to close capture. The on-screen Cancel button closes capture directly.
 
-Open Preferences with **Command–comma**, or open **Keyboard Shortcuts** directly with **Command–Option–comma**, including from the overlay. These defaults can be changed or cleared, along with every other app-defined shortcut. The gear and menu-bar menus provide clickable paths even when shortcuts are unassigned. Instant Capture and Freeze Display toggle shortcuts start unassigned and affect only the current overlay session.
+## Alpha limitations
 
-The editor provides **Record**, **Clear**, and **Restore Defaults**. Assignments are grouped by where they work: anywhere on your Mac, while ScreenshotX is active, or within capture selection. Conflicts are rejected before saving. See [keymap architecture](docs/keymap.md).
+Scrolling capture stitches visible rendered pixels; it cannot capture content that has not loaded or rendered. Accessibility suggestions depend on what the target app exposes and can be broader than the intended pane. Motion verification handles stationary outer edges, but animations, multiple independently moving regions, repeated patterns, and fast scrolling can require a smaller selection. If no additional content is stitched, Karuto reports it rather than saving a single viewport as a scrolling capture. Freeze captures the earliest frames returned after macOS permission and display discovery, rather than an exact keypress timestamp. Frozen window captures include anything covering the visible window; recording, scrolling capture, and the timer remain live.
 
-## Validate
+Editing, markup, OCR, GIF export, webcam overlays, recording pause/resume, and persistent capture history are not yet implemented.
+
+## Command-line interface
+
+Use `scripts/karuto` for noninteractive display and window discovery, scrolling-pane suggestions, screenshots, scrolling captures, and timed recordings. Output is JSON for agents. See the [CLI reference](docs/cli/README.md) for every command, permissions, coordinates, and examples.
+
+## Development
+
+Run the test suite with:
 
 ```sh
 bash scripts/test.sh
 ```
 
-The suite covers capture-coordinate conversion, selection geometry, local storage, Rust overlap detection and PNG output, and the Swift/Rust bridge. See [alpha validation](docs/alpha-validation.md) for the distinction between automated checks and live app checks.
-
-## Documentation
-
-- [Initial implementation plan](docs/implementation-plan.md)
-- [Architecture and module contracts](docs/agents/architecture.md)
-- [Keymap and session preferences](docs/keymap.md)
-- [Alpha validation and limitations](docs/alpha-validation.md)
-- [Selection performance measurements](docs/selection-performance.md)
-- [Memory budget and measurements](docs/memory-performance.md)
+See the [architecture](docs/agents/architecture.md), [keymap](docs/keymap.md), [alpha validation](docs/alpha-validation.md), and [memory measurements](docs/memory-performance.md) for implementation and testing details.

@@ -1,12 +1,12 @@
 # Alpha implementation coordination
 
-Start with `docs/implementation-plan.md`. All capture target geometry crossing modules uses global AppKit screen points, bottom-left origin. Only Capture converts into ScreenCaptureKit coordinates. Shared models are in `Sources/ScreenshotX/Shared/CaptureModels.swift` and owned by the orchestrator.
+Start with `docs/implementation-plan.md`. All capture target geometry crossing modules uses global AppKit screen points, bottom-left origin. Only Capture converts into ScreenCaptureKit coordinates. Shared models are in `Sources/Karuto/Shared/CaptureModels.swift` and owned by the orchestrator.
 
 ## File ownership
 
-- Capture agent: `Sources/ScreenshotX/Capture/`, `Tests/ScreenshotXTests/Capture*`.
-- UI agent: `Sources/ScreenshotX/UI/`, `Tests/ScreenshotXTests/UI*`.
-- Appshots agent: `stitcher/`, `Sources/CStitcher/`, `Sources/ScreenshotX/Appshots/`, `Tests/ScreenshotXTests/Stitch*`.
+- Capture agent: `Sources/Karuto/Capture/`, `Tests/KarutoTests/Capture*`.
+- UI agent: `Sources/Karuto/UI/`, `Tests/KarutoTests/UI*`.
+- Appshots agent: `stitcher/`, `Sources/CStitcher/`, `Sources/Karuto/Appshots/`, `Tests/KarutoTests/Stitch*`.
 - Orchestrator: Shared, App, Storage, entry point, Package.swift, scripts, Resources, integration tests and documentation.
 
 No agent edits another owner's files. Propose interface changes to the orchestrator. Compile errors in another module should be reported, not repaired without reassignment. Use only public Apple APIs. No browser plugin, browser runtime, browser automation, network client, telemetry, or image editor.
@@ -21,7 +21,15 @@ No agent edits another owner's files. Propose interface changes to the orchestra
 
 ## Appshots contract
 
-`final class StitchingSession: @unchecked Sendable` owns serialization/locking and bounded state. `init(directory: URL) throws`, `append(_ frame: PixelFrame) throws -> StitchProgress`, `finish(to: URL) throws -> StitchOutput`, `cancel()`. `StitchProgress` has `height: Int`, `message: String`, `accepted: Bool`; `StitchOutput` has `width: Int`, `height: Int`. Append is synchronous, serialized by frame callback queue; finish only happens after frame stream stop, with internal locking to prevent overlap. PNG output must stream from disk-backed strips without allocating the complete output bitmap. A narrow C interface is exposed as module `CStitcher`; static library named `screenshotx_stitcher` in `stitcher/target/release`. Rust tests should verify known synthetic overlaps and failure cases. Add tests that compile independently; parent builds integrated app.
+`final class StitchingSession: @unchecked Sendable` owns serialization/locking and bounded state. `init(directory: URL) throws`, `append(_ frame: PixelFrame) throws -> StitchProgress`, `finish(to: URL) throws -> StitchOutput`, `cancel()`. `StitchProgress` has `height: Int`, `message: String`, `accepted: Bool`; `StitchOutput` has `width: Int`, `height: Int`. Append is synchronous, serialized by frame callback queue; finish only happens after frame stream stop, with internal locking to prevent overlap. PNG output must stream from disk-backed strips without allocating the complete output bitmap. A narrow C interface is exposed as module `CStitcher`; static library named `karuto_stitcher` in `stitcher/target/release`. Rust tests should verify known synthetic overlaps and failure cases. Add tests that compile independently; parent builds integrated app.
+
+### Scrolling-pane discovery and verification
+
+`ScrollRegionResolver` owns app-scoped Accessibility hit testing in an actor, away from pointer rendering. It walks up to 16 ancestors with short messaging timeouts and a bounded cache. `CaptureUIController` coalesces hover queries and discards results after pointer, mode, window, or session changes. Area mode retains its window suggestion; Scrolling mode labels an accessible candidate **Suggested scrolling area** and its fallback **Window bounds — adjust area**. Both click suggestions and manual drags use `commitArea`. `onScrollInputPoint` delivers the original suggestion click before `onCapture`; a drawn or adjusted rectangle uses its center. Accessibility suggestions are never called verified.
+
+Production scrolling sessions use `StitchingSession(directory:detectScrollContent: true)`. The calibrated Rust entry point retains at most four distinct frames (128 MiB at the existing per-frame limit) during active calibration. A majority of three frame-pair differences proposes moving bounds. An excluded edge also needs stationary contrast evidence, so a blank margin alone cannot justify cropping. The existing strict matcher must verify unique vertical displacement across all three cropped pairs. Every retained sample is then replayed through that matcher before publishing the crop. Failed verification abstains; it never substitutes a looser alignment or starts a partial capture after discarding the beginning.
+
+`StitchProgress.disposition == 4` means checking, not accepted image growth. Progress also carries `contentRect`, `viewportHeight`, and `sourceSize`; crop coordinates use input pixels with a top-left origin. `AutomaticScrollDriver` starts with small calibration steps and then scales input to the verified viewport height. It validates the frontmost target before every input event and switches to manual on interrupted automation. Both automatic and manual modes retain strict pixel verification. The coordinator shows a mouse-transparent `ScrollContentGuide` after verification; an unverified rejection stops capture and offers **Adjust Area**. The CLI uses the same stitching path and exposes `content_rect`; `scroll-region` is a read-only structural query.
 
 ## Current modules and future local features
 
@@ -43,7 +51,7 @@ Preview hover tracking covers the whole panel, including its controls. Leaving a
 
 The capture toolbar is based on the all-in-one reference: charcoal rounded mode group, icon-over-label buttons, and separate width × height controls. The screenshot workflow asset depicts annotation and is not a capture-toolbar reference. Deferred features must not appear as working controls. Settings uses native grouped controls and a sidebar; it is an adaptation rather than a verified pixel-for-pixel reproduction of the reference settings.
 
-The alpha originally opened a generic settings form. That was a launch and visual-review failure. Normal launch now opens capture; settings is secondary. UI changes require checking the running app, not merely successful compilation or accessibility-tree inspection.
+Karuto launches quietly into the menu bar. Launching or reopening the app never presents capture automatically; capture is opened explicitly through its configured shortcut or menu bar menu. Settings is secondary. UI changes require checking the running app, not merely successful compilation or accessibility-tree inspection.
 
 The selection canvas establishes its capture crosshair when the overlay opens, without waiting for pointer movement. Toolbar controls retain their native cursors, and dismissal releases the capture cursor. Cursor handling must account for the toolbar being the key window while the screen-sized selection panels are not. Apple documents that [`activeAlways` tracking suppresses `cursorUpdate(with:)`](https://developer.apple.com/documentation/appkit/nstrackingarea/options-swift.struct/activealways), so adding that event flag to the existing always-active movement tracker alone is insufficient.
 
@@ -56,3 +64,11 @@ The coordinator owns the frozen session and passes its images to the UI. It choo
 ## Keyboard configuration
 
 See [keymap architecture](../keymap.md) for the command registry, versioned persistence, scope ownership, global-registration rollback, recorder lifecycle, and default/session separation. Application-defined shortcuts must come from this registry; no independent hardcoded key handlers or equivalents.
+
+## Setup and login launch
+
+Settings → Setup uses `SystemSetupSupport` for read-only Screen Recording, Accessibility/event-posting, and Microphone status. Its permission buttons open the corresponding System Settings privacy pages; they do not grant access or request it preemptively. Status refreshes when the section opens or Preferences becomes key again, with no idle timer. `SetupSupporting` is the test seam; tests substitute it so they never alter system permissions or real login items.
+
+Launch at login uses Apple's [`SMAppService.mainApp`](https://developer.apple.com/documentation/servicemanagement/smappservice/mainapp), with actual system status as its source of truth. No mirrored UserDefaults flag or separate helper executable is used. While an update is pending, the switch is disabled; failures refresh actual state and show an inline error. Registered services needing approval remain selected with an explicit approval message and a Login Items button. Unregistering prevents future login launches without quitting the current main app.
+
+All GUI launches initialize the status item and shortcuts without presenting capture or requesting screen access. Launch reason detection is unnecessary: manual opens, login launches, and reopens all remain quiet. `applicationShouldHandleReopen` declines default window presentation. The accessory activation policy and `LSUIElement` keep Karuto out of the Dock. Capture opens through its configured shortcut or explicit menu bar actions. Shortcut-registration errors at startup are reflected in the menu bar tooltip rather than opening an alert.

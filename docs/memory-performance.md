@@ -4,7 +4,7 @@ Target: less than 50 MiB at idle. The user clarified that temporary peaks while 
 
 ## Repeatable check
 
-Use the signed release app. Close capture selection, previews, and Settings, finish any recording, and let pending work settle. Find its PID with `pgrep -x ScreenshotX`, then run:
+Use the signed release app. Close capture selection, previews, and Settings, finish any recording, and let pending work settle. Find its PID with `pgrep -x Karuto`, then run:
 
 ```sh
 bash scripts/memory.sh PID footprint 50

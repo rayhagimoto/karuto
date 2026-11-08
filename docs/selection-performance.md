@@ -14,7 +14,7 @@ Measured on 2026-11-07, arm64, macOS 27.0.1 (26A434), optimized Swift 6 compilat
 
 The former operation is the actual `SelectionOverlayView.draw(_:)` method from the saved pre-change source, drawing its dimming path, outline, handles, and badge into `NSBitmapImageRep` through `NSGraphicsContext`. The complete saved controller source was compiled with a benchmark appended to the same file to access the private view. The drawing algorithm was not reimplemented. Bitmap allocation, clearing, input assignment, and PNG encoding were outside the timed section. Setting bitmap logical size supplies the backing scale; the context is not scaled a second time.
 
-The new operation is the actual [`SelectionOverlayRenderer.update(rect:text:resizable:)`](../Sources/ScreenshotX/UI/SelectionOverlayRenderer.swift), including its disabled-animation transaction, path updates, and changed text measurement. It does not rasterize a full-screen bitmap. Core Animation rasterization, transaction delivery, GPU composition, window presentation, and the controller's other work are outside this measurement. The two columns therefore measure different stages of rendering, not equivalent complete frames. The 2× former-renderer run included a 59.890 ms maximum outlier; no absolute timing threshold is enforced.
+The new operation is the actual [`SelectionOverlayRenderer.update(rect:text:resizable:)`](../Sources/Karuto/UI/SelectionOverlayRenderer.swift), including its disabled-animation transaction, path updates, and changed text measurement. It does not rasterize a full-screen bitmap. Core Animation rasterization, transaction delivery, GPU composition, window presentation, and the controller's other work are outside this measurement. The two columns therefore measure different stages of rendering, not equivalent complete frames. The 2× former-renderer run included a 59.890 ms maximum outlier; no absolute timing threshold is enforced.
 
 The host's Dell display was separately reported by the parent process as 2560 × 1440 points, scale 1, maximum refresh 165 Hz; its nominal refresh interval is about 6.06 ms. The former offscreen draw's measured CPU duration is substantial relative to that interval, but this is contextual evidence, not a measurement of application refresh or proof that the replacement presents at 165 Hz. Native display tracing remains necessary to establish presentation cadence.
 
@@ -34,11 +34,11 @@ The parent agent then verified the same interior drag through live computer inte
 
 ## Sources and reproduction
 
-The local benchmark workspace is `/tmp/screenshotx-selection-bench/`; it is a temporary validation artifact, not part of the shipped app. It contains `Baseline.swift`, `Harness.swift.txt`, `UIComponents.swift`, `SelectionGeometry.swift`, `CaptureModels.swift`, `SelectionOverlayRenderer.swift`, `RetainedBench.swift`, `VerifySnapshots.swift`, the executables, result logs, and PNGs.
+The local benchmark workspace is `/tmp/karuto-selection-bench/`; it is a temporary validation artifact, not part of the shipped app. It contains `Baseline.swift`, `Harness.swift.txt`, `UIComponents.swift`, `SelectionGeometry.swift`, `CaptureModels.swift`, `SelectionOverlayRenderer.swift`, `RetainedBench.swift`, `VerifySnapshots.swift`, the executables, result logs, and PNGs.
 
 Source identities for the measured implementation:
 
-- Pre-change controller snapshot: `/tmp/ScreenshotX-CaptureUI-before-drag-fix.swift`, SHA-256 `ff3610d42691738d91a8fd79890b5b5da89a21278a75bdcfae305a4be09fedc8`.
+- Pre-change controller snapshot: `/tmp/Karuto-CaptureUI-before-drag-fix.swift`, SHA-256 `ff3610d42691738d91a8fd79890b5b5da89a21278a75bdcfae305a4be09fedc8`.
 - New renderer snapshot: SHA-256 `0c902f887d6bc536ae8a4be2e0d2c76ef5cbd485ba4e30eedd1af288a00d637a`.
 - Final renderer with input coverage, independently checked after the timed revision: SHA-256 `43d0023fd03b3ec660526e7c3b0344869438942f366f69b2d9d1dd8c0726d5df`. Saved as `FinalSelectionOverlayRenderer.swift`; snapshot/probe harness is `RenderHitCoverage.swift`.
 - Final timing logs: `baseline-final-results.txt` and `retained-final-results.txt`.
@@ -47,7 +47,7 @@ Source identities for the measured implementation:
 To rebuild while the temporary workspace exists:
 
 ```sh
-cd /tmp/screenshotx-selection-bench
+cd /tmp/karuto-selection-bench
 swiftc -O -swift-version 6 -module-cache-path module-cache Baseline.swift UIComponents.swift SelectionGeometry.swift CaptureModels.swift -o baseline
 swiftc -O -swift-version 6 -module-cache-path module-cache SelectionOverlayRenderer.swift RetainedBench.swift -o retained
 swiftc -O -module-cache-path module-cache VerifySnapshots.swift -o verify-snapshots

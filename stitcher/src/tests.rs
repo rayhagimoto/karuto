@@ -5,7 +5,7 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "screenshotx-stitch-test-{}-{}",
+            "karuto-stitch-test-{}-{}",
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ));
@@ -308,4 +308,203 @@ fn high_frequency_periodic_patterns_do_not_choose_an_arbitrary_offset() {
         assert_eq!(result.disposition, 2, "period {period}");
         assert_eq!(result.height, height as u32);
     }
+}
+
+fn decorated_frame(width: usize, height: usize, rect: ContentRect, start: usize) -> Vec<u8> {
+    let mut raw = pixels(width, height, 50_000, 0);
+    let content = pixels(rect.width as usize, rect.height as usize, start, 0);
+    for y in 0..rect.height as usize {
+        let to = ((y + rect.y as usize) * width + rect.x as usize) * 4;
+        let from = y * rect.width as usize * 4;
+        raw[to..to + rect.width as usize * 4]
+            .copy_from_slice(&content[from..from + rect.width as usize * 4]);
+    }
+    raw
+}
+
+#[test]
+fn calibrated_capture_crops_fixed_edges_and_replays_initial_content_exactly() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let rect = ContentRect {
+        x: 40,
+        y: 20,
+        width: 176,
+        height: 160,
+    };
+    for (index, start) in [0, 24, 48, 72, 96, 120].iter().enumerate() {
+        let raw = decorated_frame(256, 200, rect, *start);
+        let progress = session.append(&raw, 256, 200, 1024).unwrap();
+        assert_eq!(progress.disposition, if index < 3 { 4 } else { 0 });
+    }
+    assert_eq!(session.rect, Some(rect));
+    let output = dir.0.join("calibrated.png");
+    let progress = session.finish(&output).unwrap();
+    assert_eq!((progress.width, progress.height), (176, 280));
+    let (w, h, actual) = decode_png(&output);
+    assert_eq!(actual, pixels(w, h, 0, 0));
+}
+
+#[test]
+fn calibrated_capture_preserves_clean_full_frame_and_ignores_duplicate_evidence() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    for start in [0, 0, 20, 20, 40, 60] {
+        session
+            .append(&pixels(96, 128, start, 0), 96, 128, 384)
+            .unwrap();
+    }
+    assert_eq!(
+        session.rect,
+        Some(ContentRect {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 128
+        })
+    );
+    let output = dir.0.join("full.png");
+    session.finish(&output).unwrap();
+    let (w, h, actual) = decode_png(&output);
+    assert_eq!((w, h), (96, 188));
+    assert_eq!(actual, pixels(w, h, 0, 0));
+}
+
+#[test]
+fn calibrated_capture_rejects_periodic_and_unrelated_animation() {
+    for periodic in [true, false] {
+        let dir = TestDirectory::new();
+        let mut session = CalibratedSession::new(&dir.0).unwrap();
+        for n in 0..4 {
+            let raw = if periodic {
+                (0..128)
+                    .flat_map(|y| pixels(96, 1, (y + n * 3) % 16, 0))
+                    .collect()
+            } else {
+                pixels(96, 128, n * 1000, 0)
+            };
+            session.append(&raw, 96, 128, 384).unwrap();
+        }
+        assert!(session.rect.is_none());
+        assert!(session.finish(&dir.0.join("bad.png")).is_err());
+    }
+}
+
+#[test]
+fn calibrated_capture_does_not_treat_blank_static_background_as_motion() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let raw = vec![255; 96 * 128 * 4];
+    for _ in 0..8 {
+        assert_eq!(session.append(&raw, 96, 128, 384).unwrap().disposition, 4);
+    }
+    assert!(session.rect.is_none());
+    assert!(session.finish(&dir.0.join("blank.png")).is_err());
+}
+
+#[test]
+fn calibrated_ffi_reports_only_verified_input_pixel_bounds() {
+    let dir = TestDirectory::new();
+    let directory = std::ffi::CString::new(dir.0.to_str().unwrap()).unwrap();
+    let mut error = [0 as c_char; 256];
+    let handle = unsafe {
+        sx_stitcher_create_calibrated(directory.as_ptr(), error.as_mut_ptr(), error.len())
+    };
+    assert!(!handle.is_null());
+    let mut rect = ContentRect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
+    assert_eq!(unsafe { sx_stitcher_content_rect(handle, &mut rect) }, 0);
+    let expected = ContentRect {
+        x: 32,
+        y: 16,
+        width: 128,
+        height: 128,
+    };
+    for start in [0, 16, 32, 48] {
+        let bytes = decorated_frame(192, 160, expected, start);
+        let mut progress = Progress {
+            width: 0,
+            height: 0,
+            disposition: 0,
+        };
+        assert_eq!(
+            unsafe {
+                sx_stitcher_append(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    192,
+                    160,
+                    768,
+                    &mut progress,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+            0
+        );
+    }
+    assert_eq!(unsafe { sx_stitcher_content_rect(handle, &mut rect) }, 1);
+    assert_eq!(rect, expected);
+    assert_eq!(
+        unsafe { sx_stitcher_content_rect(handle, std::ptr::null_mut()) },
+        -1
+    );
+    unsafe { sx_stitcher_destroy(handle) };
+}
+
+#[test]
+fn calibrated_capture_rejects_independent_panes_moving_different_distances() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let rect = ContentRect {
+        x: 32,
+        y: 16,
+        width: 128,
+        height: 128,
+    };
+    for n in 0..4 {
+        let mut raw = decorated_frame(192, 160, rect, n * 16);
+        let right = pixels(64, 128, n * 24, 0);
+        for y in 0..128 {
+            let p = ((y + 16) * 192 + 96) * 4;
+            raw[p..p + 64 * 4].copy_from_slice(&right[y * 64 * 4..(y + 1) * 64 * 4]);
+        }
+        session.append(&raw, 192, 160, 768).unwrap();
+    }
+    assert!(session.rect.is_none());
+    assert!(session.finish(&dir.0.join("two-panes.png")).is_err());
+}
+
+#[test]
+fn calibrated_content_votes_allow_pixels_unchanged_in_one_moving_pair() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let rect = ContentRect {
+        x: 40,
+        y: 20,
+        width: 176,
+        height: 160,
+    };
+    for start in [0, 4, 8, 12] {
+        let mut raw = decorated_frame(256, 200, rect, start);
+        // A mostly flat/repeating document is still identifiable from its unique
+        // rail. Most body pixels change in two pairs, never all three pairs.
+        for y in 0..160 {
+            for x in 24..176 {
+                let shade = if (y + start) % 3 == 2 { 234 } else { 220 };
+                let p = ((y + 20) * 256 + x + 40) * 4;
+                raw[p..p + 4].copy_from_slice(&[shade, shade, shade, 255]);
+            }
+        }
+        session.append(&raw, 256, 200, 1024).unwrap();
+    }
+    assert_eq!(session.rect, Some(rect));
+    let output = dir.0.join("voted.png");
+    let progress = session.finish(&output).unwrap();
+    assert_eq!((progress.width, progress.height), (176, 172));
 }

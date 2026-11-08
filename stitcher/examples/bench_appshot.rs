@@ -1,6 +1,6 @@
 //! Focused end-to-end benchmark with a deterministic text-like document.
 //! macOS peak process RSS is reported using getrusage; includes fixture generation.
-use screenshotx_stitcher::Session;
+use karuto_stitcher::Session;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -66,7 +66,7 @@ fn main() -> Result<(), String> {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("screenshotx-benchmark-{}", std::process::id()))
+            std::env::temp_dir().join(format!("karuto-benchmark-{}", std::process::id()))
         });
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let began = Instant::now();

@@ -4,20 +4,20 @@ import Foundation
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
 let package = Package(
-    name: "ScreenshotX",
+    name: "Karuto",
     platforms: [.macOS(.v15)],
-    products: [.executable(name: "ScreenshotX", targets: ["ScreenshotX"])],
+    products: [.executable(name: "Karuto", targets: ["Karuto"])],
     targets: [
         .systemLibrary(name: "CStitcher", path: "Sources/CStitcher"),
         .executableTarget(
-            name: "ScreenshotX", dependencies: ["CStitcher"],
+            name: "Karuto", dependencies: ["CStitcher"],
             linkerSettings: [
                 .unsafeFlags(["-L", root + "/stitcher/target/release"]),
-                .linkedLibrary("screenshotx_stitcher"), .linkedLibrary("z"),
+                .linkedLibrary("karuto_stitcher"), .linkedLibrary("z"),
                 .linkedFramework("AppKit"), .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("AVFoundation"), .linkedFramework("Carbon")
             ]
         ),
-        .testTarget(name: "ScreenshotXTests", dependencies: ["ScreenshotX"])
+        .testTarget(name: "KarutoTests", dependencies: ["Karuto"])
     ]
 )

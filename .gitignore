@@ -5,3 +5,5 @@ stitcher/target/
 *.xcuserstate
 
 docs/research
+
+.scratch/

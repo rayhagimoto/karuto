@@ -13,10 +13,10 @@ Settings → Capture writes persistent `AppSettings` defaults. Opening capture c
 | Context | Actions | Assigned defaults |
 | --- | --- | --- |
 | Global | Open toolbar, previous area, restore last capture, stop capture | Open toolbar: Control–Shift–2 |
-| ScreenshotX active, including overlay | Preferences, keyboard shortcuts, quit | Command–comma, Command–Option–comma, Command–Q |
+| Karuto active, including overlay | Preferences, keyboard shortcuts, close Preferences, quit | Command–comma, Command–Option–comma, Command–W, Command–Q |
 | Capture selection | Confirm, cancel, Instant Capture toggle, Freeze Display toggle, six capture modes | Confirm: Return; cancel: Escape; others unassigned |
 
-Recording setup uses the configured confirm/cancel actions too. Native macOS menu navigation, text editing, file dialogs, and system shortcuts remain platform behavior; they are not additional ScreenshotX bindings. Bare printable overlay keys do not interrupt typing dimensions. Global and application bindings require Command, Control, or Option to avoid intercepting ordinary typing.
+Recording setup uses the configured confirm/cancel actions too. Native macOS menu navigation, text editing, file dialogs, and system shortcuts remain platform behavior; they are not additional Karuto bindings. Bare printable overlay keys do not interrupt typing dimensions. Global and application bindings require Command, Control, or Option to avoid intercepting ordinary typing.
 
 ## Persistence and validation
 

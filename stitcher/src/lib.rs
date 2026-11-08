@@ -1,5 +1,7 @@
 //! Bounded vertical screenshot stitching. The caller owns capture and scrolling.
+mod calibration;
 mod png;
+use calibration::{CalibratedSession, ContentRect};
 
 use std::ffi::{CStr, c_char};
 use std::fs::{self, File, OpenOptions};
@@ -358,8 +360,32 @@ impl Drop for Session {
     }
 }
 
+enum StitchSession {
+    Strict(Session),
+    Calibrated(CalibratedSession),
+}
+impl StitchSession {
+    fn append(
+        &mut self,
+        bytes: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Result<Progress> {
+        match self {
+            Self::Strict(session) => session.append(bytes, width, height, stride),
+            Self::Calibrated(session) => session.append(bytes, width, height, stride),
+        }
+    }
+    fn finish(&mut self, destination: &Path) -> Result<Progress> {
+        match self {
+            Self::Strict(session) => session.finish(destination),
+            Self::Calibrated(session) => session.finish(destination),
+        }
+    }
+}
 pub struct SXStitcher {
-    session: Mutex<Session>,
+    session: Mutex<StitchSession>,
 }
 
 unsafe fn error_message(out: *mut c_char, capacity: usize, message: &str) {
@@ -418,10 +444,49 @@ pub unsafe extern "C" fn sx_stitcher_create(
     guarded(error, capacity, || {
         let session = Session::new(unsafe { path_from_c(directory)? })?;
         Ok(Box::into_raw(Box::new(SXStitcher {
-            session: Mutex::new(session),
+            session: Mutex::new(StitchSession::Strict(session)),
         })))
     })
     .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sx_stitcher_create_calibrated(
+    directory: *const c_char,
+    error: *mut c_char,
+    capacity: usize,
+) -> *mut SXStitcher {
+    guarded(error, capacity, || {
+        let session = CalibratedSession::new(unsafe { path_from_c(directory)? })?;
+        Ok(Box::into_raw(Box::new(SXStitcher {
+            session: Mutex::new(StitchSession::Calibrated(session)),
+        })))
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// 1 verified, 0 still checking, -1 invalid state. Output coordinates are input pixels.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sx_stitcher_content_rect(
+    handle: *mut SXStitcher,
+    rect: *mut ContentRect,
+) -> i32 {
+    if handle.is_null() || rect.is_null() {
+        return -1;
+    }
+    let Ok(session) = (unsafe { &*handle }).session.lock() else {
+        return -1;
+    };
+    match &*session {
+        StitchSession::Calibrated(session) => match session.rect {
+            Some(value) => {
+                unsafe { *rect = value };
+                1
+            }
+            None => 0,
+        },
+        StitchSession::Strict(_) => 0,
+    }
 }
 
 #[unsafe(no_mangle)]

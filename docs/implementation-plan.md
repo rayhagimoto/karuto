@@ -1,6 +1,6 @@
-# ScreenshotX initial implementation plan
+# Karuto initial implementation plan
 
-Plan date: 7 November 2026. Status: ready for implementation; no application code exists yet.
+Plan date: 7 November 2026. Status: implemented alpha; this document records the initial scope. Later additions include automatic scrolling with manual fallback, accessible pane suggestions, and motion-verified exclusion of static outer chrome. For current contracts and evidence, use [architecture](agents/architecture.md#scrolling-pane-discovery-and-verification), [CLI](cli/README.md), and [validation](alpha-validation.md#motion-verified-scrolling-capture).
 
 Build a small native Mac capture utility with a reference-inspired capture toolbar and corner preview. The first release captures screenshots, records the screen with audio, and produces vertical scrolling appshots from browser pages and native Mac apps. All capture and processing stays local. Browser extensions, browser automation, embedded browsers, and remote debugging connections are excluded.
 
@@ -43,7 +43,7 @@ Ship screenshots and recording as usable intermediate milestones. Manual vertica
 
 ## Interface specification
 
-Use the reference product’s visible layout, density, rounded dark capture surfaces, icon-above-label mode buttons, selected-mode treatment, and separate dimension panel as the design reference. Reimplement the interface with AppKit views, system text and SF Symbols where suitable. Use ScreenshotX's own name and icon.
+Use the reference product’s visible layout, density, rounded dark capture surfaces, icon-above-label mode buttons, selected-mode treatment, and separate dimension panel as the design reference. Reimplement the interface with AppKit views, system text and SF Symbols where suitable. Use Karuto's own name and icon.
 
 
 
@@ -62,7 +62,7 @@ Use the reference product’s visible layout, density, rounded dark capture surf
 - One lightweight overlay per display during selection; dim everything outside the active selection. Show a crosshair, selection border and dimensions.
 - Constrain an area to one display for this release. Multiple displays are supported as separate targets; cross-display rectangles are deferred.
 - Convert AppKit screen points, display-local capture coordinates and output pixels in one geometry implementation. Do not scatter scale or Y-axis corrections through views.
-- Exclude all ScreenshotX selection, preview and recording windows from captured pixels. Test absence of controls in the resulting file, not just in the preview.
+- Exclude all Karuto selection, preview and recording windows from captured pixels. Test absence of controls in the resulting file, not just in the preview.
 - Window mode highlights an actual capture target; the app's own windows are never candidates.
 
 ### Corner result preview
@@ -122,7 +122,7 @@ Use opaque Rust session handles and status codes; cancellation and destruction a
 
 ## Appshot algorithm
 
-The same native capture path handles browser windows and Mac apps. It requires no DOM access, extension, login automation or browser process. The user scrolls content into view; unloaded content is captured only once the target app renders it. If scrolling causes the target app to fetch data, ScreenshotX itself still performs no network request.
+The same native capture path handles browser windows and Mac apps. It requires no DOM access, extension, login automation or browser process. The user scrolls content into view; unloaded content is captured only once the target app renders it. If scrolling causes the target app to fetch data, Karuto itself still performs no network request.
 
 1. Select a fixed content region and capture its initial frame. Ask the user to exclude sidebars and persistent headers where possible.
 2. During the active session, inspect a bounded, low-rate stream of candidate frames. Accept only stable complete frames with sufficient overlap; ignore idle duplicates.
@@ -175,7 +175,7 @@ Exit: a fresh checkout builds the app; screenshot dimensions are correct; record
 
 Implement menu bar, shortcut, reference-inspired capture bar, geometry, area/display/window capture, timer, previous area, native PNG output and result preview. Add minimal settings required by these paths.
 
-Exit: each mode can capture, copy/save/drag and cancel. Verify at 1×/2× scaling, a secondary display left or above the main display, window shadow on/off, changed display arrangement and target-window closure. Compare toolbar screenshots against the reference at comparable scale. Check keyboard access, appearance and absence of ScreenshotX controls in output.
+Exit: each mode can capture, copy/save/drag and cancel. Verify at 1×/2× scaling, a secondary display left or above the main display, window shadow on/off, changed display arrangement and target-window closure. Compare toolbar screenshots against the reference at comparable scale. Check keyboard access, appearance and absence of Karuto controls in output.
 
 ### 2 Deliver reliable recording
 
@@ -198,8 +198,8 @@ Exit: all in-scope functionality passes, no network/browser dependency is requir
 ## Suggested initial layout
 
 ```text
-ScreenshotX.xcodeproj
-ScreenshotX/
+Karuto.xcodeproj
+Karuto/
   App/                 # App delegate, menu, coordinator, settings
   Capture/             # Permissions, targets, geometry, screenshots, recording
   UI/                  # Toolbar, selection overlays, preview, recorder controls

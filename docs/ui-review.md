@@ -43,7 +43,7 @@ Preferences uses a transparent 900 × 680 window with a native glass content sur
 
 The overlay retains its verified 80 × 54 mode tiles and equal 5-point inset. Its footer uses measured system-font text centering, and its native menu uses a 14-point system font. Controls are hosted inside each native glass view’s contentView. See [Apple’s native glass view](https://developer.apple.com/documentation/appkit/nsglasseffectview).
 
-Preferences is intentionally visible to ScreenshotX capture and selectable as a window. Capture controls, overlays, and previews remain excluded; the exception is a live window-ID allowlist, not a process-wide inclusion.
+Preferences is intentionally visible to Karuto capture and selectable as a window. Capture controls, overlays, and previews remain excluded; the exception is a live window-ID allowlist, not a process-wide inclusion.
 
 ## Toolbar movement and menu placement
 

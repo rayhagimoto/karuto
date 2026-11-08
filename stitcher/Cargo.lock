@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "screenshotx_stitcher"
+name = "karuto_stitcher"
 version = "0.1.0"
