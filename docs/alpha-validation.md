@@ -49,7 +49,7 @@ A release Rust benchmark stitched 54 synthetic text-like 1920 × 1080 frames int
 - Very large still images use a file placeholder in previews to avoid decoding a huge bitmap. Clipboard image conversion has a separate memory guard.
 - Temporary sessions expire after 24 hours; there is no total disk quota yet. The plan's disk and performance budgets are targets, not measured guarantees.
 - H.264 native recording is capped at 4096 × 4096; the 1080p option scales while preserving aspect ratio. Audio mixing must be checked on each supported macOS version.
-- No pause/resume, webcam, GIF, editing, OCR, background styling, or persistent history in this alpha.
+- No pause/resume, webcam, GIF, editing, background styling, or persistent history in this alpha.
 
 ## Setup and login launch
 
@@ -61,7 +61,7 @@ The full suite passes 97 Swift tests and 19 Rust tests. A pre-existing preview t
 
 ## Overlay capture options
 
-Instant Capture defaults on and Freeze Display defaults off. Settings → Capture persists defaults for new sessions. The overlay gear menu changes only the current session, including a freeze restart. Toggle shortcuts start unassigned. Frozen sessions acquire desktop frames before selection appears and export from those same frames. Live video/audio are not paused. Recording, scrolling, and timed capture remain live. Frozen-frame memory is capped at 256 MiB; window snapshots represent the visible desktop crop and reject windows spanning displays. Exact keypress-time or simultaneous multi-display capture is not guaranteed by the one-frame ScreenCaptureKit requests.
+Instant Capture defaults on for Snapshot and off for Screen Recording. Freeze Display defaults off. The capture toolbar remembers options for each mode and restarts selection when switching between frozen and live content. Toggle shortcuts start unassigned. Frozen sessions acquire desktop frames before selection appears and export from those same frames. Live video/audio are not paused. Recording, scrolling, and timed capture remain live. Frozen-frame memory is capped at 256 MiB; window snapshots represent the visible desktop crop and reject windows spanning displays. Exact keypress-time or simultaneous multi-display capture is not guaranteed by the one-frame ScreenCaptureKit requests.
 
 The signed build’s overlay dropdown was inspected live and both preference values were readable after interaction. The live window disappeared before a complete frozen-output check could finish; video-background freezing and exported pixel identity remain manual end-to-end checks. The 54 Swift and 12 Rust tests passed, including synthetic frozen-frame crop and displayed-layer orientation checks.
 
@@ -90,3 +90,17 @@ The suite passes 74 Swift and 12 Rust tests. Cursor tests exercise actual overla
 ## Reversible preview hover dismissal
 
 Hover exit now waits 500 ms before the native 180 ms ease-out fade. Passive fades retain mouse tracking and the preview entry until completion; reentry cancels the pending dismissal and restores full opacity. A canceled timer/fade cannot close a restored or replacement preview. Explicit actions still close once and then invoke their action. Timeout dismissal can also be interrupted by reentry, and cannot shorten an already scheduled hover-exit grace period. The regression test exercises leaving, returning during the grace period, returning during fade, and a subsequent successful exit using deterministic pointer input.
+
+## Ephemeral OCR (2026-11-16)
+
+The updated suite passes 102 Swift tests and 19 Rust tests. OCR checks cover independent target/toggle state, unavailable modes, shortcut persistence, private-clipboard publication and preservation on empty/cancelled results, native VisionKit recognition of generated text and blank pixels, review controls, transcript visibility, layout bounds, and release of analysis on dismissal. The review's offscreen rendering shows native detected-text highlighting and the transcript; it does not establish complete on-screen rendering or host mouse delivery. macOS service access is required for the native OCR and clipboard tests. A fresh build cache was used because the old cache referenced the repository's previous path.
+
+A full live desktop-capture walkthrough, interactive subset selection, multi-display capture, and focus/paste behavior remain manual validation gates for this feature. No screenshot file is written by the OCR path, and no test uses the general clipboard.
+
+OCR feedback follow-up: 104 Swift tests passed, including pending-review state, in-place completion, initial native select-all, dismissal cancellation, native icon/text cell bounds, and header/background drag eligibility. The reported first-use delay exceeding 60 seconds was not reproduced. A separate synthetic 3840 × 2160 diagnostic with 40 lines of 32-point text returned an empty native transcript in 0.14 seconds; it is not evidence of successful dense-text throughput. The supported small-text fixture still recognizes successfully. Live first-use latency and dense-image recognition remain validation limitations.
+
+Preview-window follow-up: 105 Swift tests passed. The review now has native window chrome, a compact toolbar, translucent material, resize/drag support, and centering based on the captured display. Checks cover decorated-frame centering, negative display origins, small available frames, native close, toolbar bounds, select-all, and preserving a moved frame when recognition completes. An offscreen rendering of the complete decorated window was inspected. Actual pointer dragging and window-manager placement remain live validation limits.
+
+Selection-copy follow-up: the regression first failed because panel Command-C was unhandled and the private clipboard retained the full transcript. After the fix, all 106 Swift tests pass. Tests use native image-selection ranges, dispatch the actual panel key-equivalent handler, read back the private clipboard after dismissal, and verify the exact sentence “Quit Karuto, replace it in Applications, then reopen.” without surrounding text. They also cover plaintext selection copy, Command-A, switching back to image mode, empty-selection preservation, toolbar validation, and removal of Copy Selection. Tests do not synthesize host keyboard or mouse delivery.
+
+Zoomable-preview follow-up: 110 Swift tests pass; the final focused run passes all 11 viewport/OCR tests. Checks cover tiny-image enlargement, large-image downscaling, fit-on-resize versus manual zoom, clamped pan, overview mouse navigation and region mapping, Space pan-mode transitions, and native OCR selection copying after zoom. Defaults were checked across wide, tall, tiny, and oversized images on small and offset displays. The rendered zoomed preview and outlined overview were inspected. Live trackpad gestures and host window-manager behavior remain manual validation limits.

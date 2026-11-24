@@ -23,6 +23,36 @@ enum ToolbarGeometry {
         return MenuPlacement(topLeft: CGPoint(x: x, y: top), opensUpward: upward)
     }
 
+    static func paletteFrame(size: CGSize, selection: CGRect, screen: CGRect, toolbar: CGRect) -> CGRect {
+        let x = selection.midX - size.width / 2
+        let candidates = [CGPoint(x: x, y: selection.maxY + 8),
+                          CGPoint(x: x, y: selection.minY - size.height - 8),
+                          CGPoint(x: selection.maxX + 8, y: selection.midY),
+                          CGPoint(x: selection.minX - size.width - 8, y: selection.midY),
+                          CGPoint(x: x, y: screen.maxY - size.height - 8),
+                          CGPoint(x: x, y: screen.minY + 8)]
+            .map { ToolbarGeometry.clamped(CGRect(origin: $0, size: size), to: screen) }
+        return candidates.first { !$0.intersects(selection) && !$0.intersects(toolbar) }
+            ?? candidates.first { !$0.intersects(toolbar) } ?? candidates[0]
+    }
+
+    static func selectionSizeFrame(size: CGSize, selection: CGRect, screen: CGRect, toolbar: CGRect, palette: CGRect) -> CGRect {
+        let x = selection.midX - size.width / 2
+        let y = selection.midY - size.height / 2
+        let candidates = [CGPoint(x: x, y: selection.minY - size.height - 8),
+                          CGPoint(x: x, y: selection.maxY + 8),
+                          CGPoint(x: selection.maxX + 8, y: y),
+                          CGPoint(x: selection.minX - size.width - 8, y: y),
+                          CGPoint(x: x, y: selection.minY + 8),
+                          CGPoint(x: x, y: selection.maxY - size.height - 8)]
+            .map { clamped(CGRect(origin: $0, size: size), to: screen) }
+        let usable = candidates.filter { !$0.intersects(toolbar) && !$0.intersects(palette) }
+        let outside = selection.insetBy(dx: -7, dy: -7)
+        let inside = selection.insetBy(dx: 7, dy: 7)
+        return usable.first { !$0.intersects(outside) } ?? usable.first { inside.contains($0) }
+            ?? usable.first ?? candidates[0]
+    }
+
     static func clamped(_ frame: CGRect, to visibleFrame: CGRect, margin: CGFloat = 8) -> CGRect {
         let bounds = visibleFrame.insetBy(dx: margin, dy: margin)
         return CGRect(x: min(max(frame.minX, bounds.minX), max(bounds.minX, bounds.maxX - frame.width)),

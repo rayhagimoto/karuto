@@ -4,26 +4,51 @@ import Testing
 
 @MainActor
 struct CaptureSessionPreferencesTests {
-    @Test func sessionOverridesDoNotWriteDefaultsAndNewSessionReadsCurrentDefaults() throws {
+    @Test func captureModesRestoreTheirOwnTimerAndRegionAcrossSessions() throws {
         let name = "KarutoTests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let settings = AppSettings(defaults: defaults)
-        var session = CaptureSessionPreferences(defaults: settings)
-        session.instantCapture = false
-        session.freezeDisplay = true
-        #expect(settings.instantCapture)
-        #expect(!settings.freezeDisplay)
-        // Opening another selection starts from saved defaults again.
-        let next = CaptureSessionPreferences(defaults: settings)
-        #expect(next.instantCapture)
-        #expect(!next.freezeDisplay)
-        // A preferences change applies to the next session, not a value snapshot
-        // already being used by an active selection.
-        settings.instantCapture = false
-        settings.freezeDisplay = true
-        #expect(next.instantCapture)
-        #expect(!next.freezeDisplay)
-        #expect(CaptureSessionPreferences(defaults: settings) == session)
+        let first = CaptureUIController(settings: settings)
+        #expect(first.delaySeconds == 0)
+        first.setRegion(.scrolling)
+        first.setMode(.screenRecording)
+        #expect(first.delaySeconds == 0)
+        #expect(first.selectedRegion == .area)
+        #expect(!first.instantCapture)
+        first.setDelay(3)
+        first.setRegion(.window)
+        first.handleShortcut(.toggleInstantCapture)
+        #expect(!first.handleShortcut(.scrollingMode))
+        #expect(first.selectedRegion == .window)
+
+        let reopened = CaptureUIController(settings: AppSettings(defaults: defaults))
+        #expect(reopened.mode == .snapshot)
+        #expect(reopened.delaySeconds == 0)
+        #expect(reopened.selectedRegion == .scrolling)
+        #expect(!reopened.instantCapture)
+        reopened.handleShortcut(.recordingMode)
+        #expect(reopened.delaySeconds == 3)
+        #expect(reopened.selectedRegion == .window)
+        #expect(reopened.instantCapture)
+        reopened.handleShortcut(.timerMode)
+        #expect(reopened.delaySeconds == 0)
+        reopened.handleShortcut(.snapshotMode)
+        #expect(reopened.delaySeconds == 0)
+        #expect(reopened.selectedRegion == .scrolling)
+    }
+
+    @Test func snapshotKeepsExistingSelectionDefaults() throws {
+        let name = "KarutoTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(false, forKey: "instantCapture")
+        defaults.set(true, forKey: "freezeDisplay")
+        let settings = AppSettings(defaults: defaults)
+        let snapshot = settings.capturePreferences(for: .snapshot)
+        #expect(!snapshot.instantCapture)
+        #expect(snapshot.freezeDisplay)
+        #expect(snapshot.delaySeconds == 0)
+        #expect(!settings.capturePreferences(for: .screenRecording).freezeDisplay)
     }
 }

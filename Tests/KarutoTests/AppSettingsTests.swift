@@ -4,6 +4,18 @@ import Testing
 
 @MainActor
 struct AppSettingsTests {
+    @Test func recordingsAlwaysSaveWhileImagesFollowPreference() throws {
+        let suite = "KarutoTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        for autoSave in [false, true] {
+            settings.autoSave = autoSave
+            #expect(settings.automaticallySaves(.video))
+            #expect(settings.automaticallySaves(.image) == autoSave)
+        }
+    }
+
     @Test func appearanceDefaultsAndPersists() throws {
         let suite = "KarutoTests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -35,7 +47,7 @@ struct AppSettingsTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.instantCapture)
+        #expect(!settings.instantCapture)
         #expect(!settings.freezeDisplay)
         #expect(settings.automaticScrolling)
         settings.instantCapture = false

@@ -75,7 +75,7 @@ Use the reference product’s visible layout, density, rounded dark capture surf
 
 ### Recording controls
 
-- Before recording: select target, microphone device, system audio, cursor visibility and resolution. Three-second countdown is cancellable.
+- Before recording: select target, microphone device, system audio, cursor visibility and resolution. The optional countdown is cancellable.
 - During recording: compact floating panel with red recording indicator, elapsed time and Stop; also expose Stop in the menu bar.
 - Start the elapsed timer only when recording actually starts. After Stop, show Finishing until the output delegate confirms the file is ready.
 - No pause button in this version. Do not suggest that stopping and restarting a stream is seamless pause/resume.

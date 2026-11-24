@@ -67,10 +67,11 @@ enum KarutoCLI {
         """
         case "record": return """
         Usage: karuto record TARGET --output PATH --duration SECONDS [--native]
-                             [--system-audio] [--microphone] [--no-cursor]
+                             [--fps 30|60|120] [--system-audio] [--microphone] [--no-cursor]
         Records H.264 MP4 for 0.1–3600 seconds. PATH must not already exist;
         parent directory must exist. Resolution defaults to 1080p; --native uses
-        the target's native resolution. Audio is disabled unless requested.
+        the target's native resolution. Frame rate defaults to 30 fps.
+        Audio is disabled unless requested.
         \(targetHelp)
         Example: karuto record --display 1 --duration 5 --output /tmp/demo.mp4
         """
@@ -97,6 +98,7 @@ enum KarutoCLI {
         var cursor: Bool
         var shadow = true
         var native = false
+        var frameRate: RecordingFrameRate?
         var systemAudio = false
         var microphone = false
     }
@@ -138,6 +140,13 @@ enum KarutoCLI {
                 let raw = try value(flag)
                 guard request.duration == nil, let n = Double(raw), n.isFinite, (0.1...3600).contains(n) else { throw Failure("Duration must be between 0.1 and 3600 seconds") }
                 request.duration = n
+            case "--fps" where recording:
+                guard request.frameRate == nil else { throw Failure("Frame rate specified twice") }
+                let raw = try value(flag)
+                guard let fps = Int(raw), let rate = RecordingFrameRate(rawValue: fps) else {
+                    throw Failure("--fps must be 30, 60, or 120")
+                }
+                request.frameRate = rate
             case "--cursor" where !recording: request.cursor = true
             case "--no-shadow" where !recording: request.shadow = false
             case "--no-cursor" where recording: request.cursor = false
@@ -215,7 +224,9 @@ enum KarutoCLI {
             let temporary = output.deletingLastPathComponent().appendingPathComponent(".karuto-\(UUID().uuidString).\(recording ? "mp4" : "png")")
             defer { try? FileManager.default.removeItem(at: temporary) }
             if recording {
-                let options = RecordingOptions(systemAudio: request.systemAudio, microphone: request.microphone, showsCursor: request.cursor, resolution: request.native ? .native : .hd1080)
+                let options = RecordingOptions(systemAudio: request.systemAudio, microphone: request.microphone,
+                                               showsCursor: request.cursor, resolution: request.native ? .native : .hd1080,
+                                               frameRate: request.frameRate ?? .fps30)
                 try await engine.startRecording(target: target, options: options, to: temporary)
                 var recordingFailure: Error?
                 let timer = Task { try await Task.sleep(for: .seconds(request.duration!)) }

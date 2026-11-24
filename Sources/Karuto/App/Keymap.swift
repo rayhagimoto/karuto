@@ -7,8 +7,11 @@ enum ShortcutScope: String, Codable, Sendable { case global, application, overla
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     case openCapture, previousArea, restoreCapture, stopCapture
     case preferences, keymap, closePreferences, quit
-    case confirmCapture, cancelCapture, toggleInstantCapture, toggleFreezeDisplay
+    case confirmCapture, cancelCapture, toggleInstantCapture, toggleFreezeDisplay, toggleOCR
+    case copyScreenshot, saveScreenshot
     case areaMode, fullscreenMode, windowMode, scrollingMode, timerMode, recordingMode
+    case snapshotMode
+    case selectLastArea, undoAnnotation, redoAnnotation
 
     var scope: ShortcutScope {
         switch self {
@@ -35,15 +38,22 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .keymap: "Open keyboard shortcuts"
         case .quit: "Quit Karuto"
         case .confirmCapture: "Confirm capture"
+        case .copyScreenshot: "Copy screenshot without saving"
+        case .saveScreenshot: "Save screenshot to the Save folder"
         case .cancelCapture: "Cancel capture"
-        case .toggleInstantCapture: "Toggle Instant Capture for this session"
-        case .toggleFreezeDisplay: "Toggle Freeze Display for this session"
+        case .toggleInstantCapture: "Toggle Instant Capture for the current mode"
+        case .toggleFreezeDisplay: "Toggle Freeze Display for snapshots"
+        case .toggleOCR: "Toggle OCR for this session"
         case .areaMode: "Select Area mode"
         case .fullscreenMode: "Select Fullscreen mode"
         case .windowMode: "Select Window mode"
         case .scrollingMode: "Select Scrolling mode"
-        case .timerMode: "Select Timer mode"
-        case .recordingMode: "Select Recording mode"
+        case .timerMode: "Toggle 3-second capture timer"
+        case .recordingMode: "Select Screen Recording"
+        case .snapshotMode: "Select Snapshot"
+        case .selectLastArea: "Select last capture region"
+        case .undoAnnotation: "Undo annotation"
+        case .redoAnnotation: "Redo annotation"
         }
     }
     var defaultBinding: ShortcutBinding? {
@@ -54,7 +64,12 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .keymap: ShortcutBinding(keyCode: 43, modifiers: [.command, .option])
         case .quit: ShortcutBinding(keyCode: 12, modifiers: .command)
         case .confirmCapture: ShortcutBinding(keyCode: 36, modifiers: [])
+        case .copyScreenshot: ShortcutBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: .command)
+        case .saveScreenshot: ShortcutBinding(keyCode: UInt16(kVK_ANSI_S), modifiers: .command)
         case .cancelCapture: ShortcutBinding(keyCode: 53, modifiers: [])
+        case .selectLastArea: ShortcutBinding(keyCode: 15, modifiers: .command)
+        case .undoAnnotation: ShortcutBinding(keyCode: 6, modifiers: .command)
+        case .redoAnnotation: ShortcutBinding(keyCode: 6, modifiers: [.command, .shift])
         default: nil
         }
     }
@@ -150,6 +165,15 @@ struct KeymapConfiguration: Codable, Equatable, Sendable {
     func setting(_ binding: ShortcutBinding?, for action: ShortcutAction) -> Self {
         var result = self
         result.assignments[action.rawValue] = Assignment(binding: binding)
+        return result
+    }
+    /// Existing custom shortcuts take precedence over newly introduced defaults.
+    func adoptingEditorDefaults() -> Self {
+        var result = self
+        for action in [ShortcutAction.selectLastArea, .undoAnnotation, .redoAnnotation, .copyScreenshot, .saveScreenshot]
+            where assignments[action.rawValue] == nil && assignments.values.contains(where: { $0.binding == action.defaultBinding }) {
+            result = result.setting(nil, for: action)
+        }
         return result
     }
     func validated() throws -> Self {

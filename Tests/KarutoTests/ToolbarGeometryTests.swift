@@ -32,6 +32,23 @@ struct ToolbarGeometryTests {
         #expect(placement.topLeft == CGPoint(x: 472, y: 392))
     }
 
+    @Test func selectionSizeAtBottomEdgeAvoidsPaletteAndResizeHandles() {
+        let screen = CGRect(x: -1200, y: 100, width: 1000, height: 700)
+        let rect = CGRect(x: -960, y: 100, width: 360, height: 200)
+        let palette = CGRect(x: rect.midX - 193, y: rect.maxY + 8, width: 386, height: 38)
+        let frame = ToolbarGeometry.selectionSizeFrame(size: CGSize(width: 144, height: 28), selection: rect, screen: screen,
+                                                       toolbar: .null, palette: palette)
+        #expect(screen.contains(frame))
+        #expect(!frame.intersects(rect.insetBy(dx: -7, dy: -7)))
+        #expect(!frame.intersects(palette))
+
+        let strip = CGRect(x: screen.minX, y: screen.minY + 15, width: screen.width, height: 130)
+        let blockedTop = CGRect(x: strip.midX - 200, y: strip.maxY, width: 400, height: 40)
+        let inset = ToolbarGeometry.selectionSizeFrame(size: frame.size, selection: strip, screen: screen,
+                                                       toolbar: blockedTop, palette: .null)
+        #expect(strip.insetBy(dx: 7, dy: 7).contains(inset))
+    }
+
     @Test func toolbarMovementClampsAtEdgesAndCanCrossDisplays() {
         let left = CGRect(x: -1440, y: 0, width: 1440, height: 900)
         let right = CGRect(x: 0, y: 0, width: 1920, height: 1080)

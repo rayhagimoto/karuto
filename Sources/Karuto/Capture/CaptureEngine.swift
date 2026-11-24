@@ -18,11 +18,17 @@ final class CaptureEngine {
     private let headless: Bool
     init(headless: Bool = false) { self.headless = headless }
 
+    /// Live selection uses only display geometry and front-to-back window
+    /// metadata. Resolve ScreenCaptureKit objects when a capture actually starts.
+    func selectionCatalog() -> CaptureCatalog {
+        CaptureCatalog(displays: localDisplayCatalog(), windows: metadataWindows())
+    }
+
     func catalog() async throws -> CaptureCatalog {
         // Choosing a mode should not trigger a privacy prompt. Public window metadata
         // supplies IDs/bounds before consent; titles may be withheld by macOS.
         if !CGPreflightScreenCaptureAccess() {
-            return CaptureCatalog(displays: localDisplayCatalog(), windows: metadataWindows())
+            return selectionCatalog()
         }
         let content = try await shareableContent()
         return catalog(from: content)
@@ -127,7 +133,9 @@ final class CaptureEngine {
             let config = resolved.configuration
             config.width = size.width
             config.height = size.height
-            config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+            // With only three surfaces the H.264 writer can stall after the first four frames.
+            config.queueDepth = 6
+            config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(options.frameRate.rawValue))
             config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             config.showsCursor = options.showsCursor
             config.ignoreShadowsSingleWindow = true
@@ -283,6 +291,7 @@ final class CaptureEngine {
 
     private func metadataWindows() -> [CaptureWindow] {
         let policy = windowPolicy
+        let primaryHeight = primaryScreenHeight
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
         return windows.compactMap { info in
@@ -295,7 +304,7 @@ final class CaptureEngine {
                   rect.width > 1, rect.height > 1 else { return nil }
             return CaptureWindow(id: id, title: info[kCGWindowName as String] as? String ?? "",
                                  applicationName: info[kCGWindowOwnerName as String] as? String ?? "Window",
-                                 frame: CaptureGeometry.appKitRect(fromQuartz: rect, primaryHeight: primaryScreenHeight), processID: pid)
+                                 frame: CaptureGeometry.appKitRect(fromQuartz: rect, primaryHeight: primaryHeight), processID: pid)
         }
     }
 

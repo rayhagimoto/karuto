@@ -17,6 +17,7 @@ enum CaptureClipboardError: LocalizedError {
 @MainActor
 final class CaptureClipboard {
     nonisolated static let maximumPixelCount = 33_554_432
+    private nonisolated static let maximumPNGBytes = 128 * 1024 * 1024
     private let pasteboard: NSPasteboard
     private var provider: ClipboardTIFFProvider?
     private var requestID: UInt64 = 0
@@ -24,20 +25,36 @@ final class CaptureClipboard {
     init(pasteboard: NSPasteboard = .general) { self.pasteboard = pasteboard }
 
     func copy(_ artifact: CaptureArtifact) async throws {
+        try await copyPNG(width: artifact.width, height: artifact.height, kind: artifact.kind) {
+            try Self.loadPNG(at: artifact.url)
+        }
+    }
+
+    func copy(_ image: CGImage) async throws {
+        try await copyPNG(width: image.width, height: image.height) {
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+                throw CaptureClipboardError.invalidImage
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw CaptureClipboardError.invalidImage }
+            return data as Data
+        }
+    }
+
+    private func copyPNG(width: Int, height: Int, kind: ArtifactKind = .image,
+                         load: @escaping @Sendable () throws -> Data) async throws {
         requestID &+= 1
         let currentRequest = requestID
-        guard artifact.kind == .image else { throw CaptureClipboardError.notAnImage }
-        guard artifact.width > 0, artifact.height > 0,
-              Double(artifact.width) * Double(artifact.height) <= Double(Self.maximumPixelCount) else {
+        guard kind == .image else { throw CaptureClipboardError.notAnImage }
+        guard width > 0, height > 0, Double(width) * Double(height) <= Double(Self.maximumPixelCount) else {
             throw StorageError.oversizedClipboard
         }
-        // Validate and read before taking clipboard ownership. A missing, invalid,
-        // or oversized file must leave the user's previous clipboard intact.
-        let data = try await Task.detached(priority: .userInitiated) {
-            try Self.loadPNG(at: artifact.url)
-        }.value
+        try Task.checkCancellation()
+        let data = try await Task.detached(priority: .userInitiated, operation: load).value
         try Task.checkCancellation()
         guard currentRequest == requestID else { throw CancellationError() }
+        guard data.count <= Self.maximumPNGBytes else { throw StorageError.oversizedClipboard }
         let item = NSPasteboardItem()
         let nextProvider = ClipboardTIFFProvider(png: data)
         guard item.setData(data, forType: .png),
@@ -51,7 +68,7 @@ final class CaptureClipboard {
 
     private nonisolated static func loadPNG(at url: URL) throws -> Data {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size <= 128 * 1024 * 1024 else { throw StorageError.oversizedClipboard }
+        guard size <= maximumPNGBytes else { throw StorageError.oversizedClipboard }
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetType(source) as String? == UTType.png.identifier,

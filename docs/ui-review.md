@@ -6,7 +6,7 @@
 
 A build passing tests is not sufficient for UI acceptance. Inspect the running app at native scale and compare it to the research reference. Use actual capture artifacts for preview checks.
 
-- Capture toolbar: translucent rounded surfaces without a decorative outline, with an evenly inset mode-selection tile, consistent icon size, balanced vertical padding, regular-weight labels, aligned dimensions panel, no clipped controls.
+- Capture toolbar: translucent rounded surfaces without a decorative outline, with an evenly inset mode-selection tile, consistent icon size, balanced vertical padding, regular-weight labels, and no clipped controls. Check that the width and height fields follow the selection and stay on its display.
 - Keyboard focus: opening capture must not focus an empty numeric field or intercept unrelated typing into it. Tab navigation and dimension editing remain available.
 - Actions: compact, consistent styling; visible disabled states; no stock raised buttons floating over arbitrary desktop content.
 - Preview: thumbnail is the main content, preserves aspect ratio, and does not waste most of the panel on letterboxing. Copy/save/reveal/dismiss actions use consistent compact icon treatments with accessible names and tooltips.
@@ -39,7 +39,7 @@ The inherited `NSButton.alignmentRectInsets` extended the custom button frames a
 
 ## Preferences and keymap visual system
 
-Preferences uses a transparent 900 × 680 window with a native glass content surface, a 220-point sidebar, and 28-point content margins. Typography uses the system font without custom kerning: 24-point page titles, 13-point controls/body, and 12-point secondary text. Navigation rows are 44 points; keymap rows are 56 points with 32-point controls and wrapped action labels. Native glass provides its own edge treatment. Recording setup uses the same style in a 500 × 620 panel.
+Preferences uses a transparent 900 × 680 window with a native glass content surface, a 220-point sidebar, and 28-point content margins. Typography uses the system font without custom kerning: 24-point page titles, 13-point controls/body, and 12-point secondary text. Navigation rows are 44 points; keymap rows are 56 points with 32-point controls and wrapped action labels. Native glass provides its own edge treatment. The 480 × 332 recording panel uses the Preferences glass and typography with the same action buttons as the capture toolbar. Its two audio buttons use the system accent to indicate active recording sources.
 
 The overlay retains its verified 80 × 54 mode tiles and equal 5-point inset. Its footer uses measured system-font text centering, and its native menu uses a 14-point system font. Controls are hosted inside each native glass view’s contentView. See [Apple’s native glass view](https://developer.apple.com/documentation/appkit/nsglasseffectview).
 
@@ -47,6 +47,6 @@ Preferences is intentionally visible to Karuto capture and selectable as a windo
 
 ## Toolbar movement and menu placement
 
-The toolbar has no dedicated drag handle. A primary-button pan anywhere in its view hierarchy moves the panel; native delayed event delivery preserves ordinary button clicks and dimension-field editing. Dragging does not select a capture mode or trigger an action. Placement is clamped to the current monitor’s usable bounds.
+The toolbar has no dedicated drag handle. A primary-button pan anywhere in its view hierarchy moves the panel; native delayed event delivery preserves ordinary button clicks. Dragging does not select a capture mode or trigger an action. Placement is clamped to the current monitor’s usable bounds.
 
 The options menu is measured before presentation and has a 320-point minimum width. Its top-left screen anchor is calculated from the gear button, the menu’s height, and the monitor’s visible frame: open below when it fits, otherwise above; if neither fits, use the larger space. Horizontal positioning is clamped too. The native menu retains its normal keyboard navigation, checkmarks, and key equivalents.

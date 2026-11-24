@@ -28,6 +28,8 @@ app="$PWD/dist/Karuto.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/Karuto" "$app/Contents/MacOS/Karuto"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+mkdir -p "$app/Contents/Resources/Licenses"
+cp LICENSE Resources/Licenses/Flameshot* "$app/Contents/Resources/Licenses/"
 if ! command -v rsvg-convert >/dev/null; then
   printf '%s\n' 'Install librsvg (rsvg-convert) to build the app icon.' >&2
   exit 1

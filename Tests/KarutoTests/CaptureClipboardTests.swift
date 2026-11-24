@@ -22,6 +22,41 @@ struct CaptureClipboardTests {
         #expect(NSImage(pasteboard: fixture.pasteboard) != nil)
     }
 
+    @Test func explicitSnapshotDestinationsOverrideAutomaticSaveAndCopy() async throws {
+        let fixture = try ClipboardFixture()
+        defer { fixture.cleanUp() }
+        let suite = "Karuto-Snapshot-Destination-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.saveFolder = fixture.root.appendingPathComponent("Exports")
+        let store = try CaptureStore(root: fixture.root.appendingPathComponent("Sessions"))
+        let coordinator = CaptureCoordinator(settings: settings, store: store, clipboard: CaptureClipboard(pasteboard: fixture.pasteboard))
+        let source = try #require(CGImageSourceCreateWithURL(fixture.artifact.url as CFURL, nil))
+        let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+
+        settings.autoSave = true
+        settings.autoCopyScreenshots = false
+        try await coordinator.finishSnapshot(image, destination: .clipboard)
+        let png = try #require(fixture.pasteboard.data(forType: .png))
+        let copied = try #require(CGImageSourceCreateWithData(png as CFData, nil))
+        #expect(CGImageSourceCreateImageAtIndex(copied, 0, nil)?.width == image.width)
+        #expect(fixture.pasteboard.data(forType: .tiff) != nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.root.path).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: settings.saveFolder.path))
+
+        settings.autoSave = false
+        settings.autoCopyScreenshots = true
+        let changeCount = fixture.pasteboard.changeCount
+        try await coordinator.finishSnapshot(image, destination: .saveFolder)
+        #expect(fixture.pasteboard.changeCount == changeCount)
+        let saved = try FileManager.default.contentsOfDirectory(at: settings.saveFolder, includingPropertiesForKeys: nil)
+        try #require(saved.count == 1)
+        #expect(saved[0].pathExtension == "png")
+        let savedSource = try #require(CGImageSourceCreateWithURL(saved[0] as CFURL, nil))
+        #expect(CGImageSourceCreateImageAtIndex(savedSource, 0, nil)?.height == image.height)
+    }
+
     @Test func videosDoNotReplaceClipboard() async throws {
         let fixture = try ClipboardFixture()
         defer { fixture.cleanUp() }

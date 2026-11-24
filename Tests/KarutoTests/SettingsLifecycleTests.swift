@@ -4,6 +4,94 @@ import Testing
 
 @MainActor
 struct SettingsLifecycleTests {
+    @Test func recordingFrameRateAndAudioControlsPersistIndependently() throws {
+        _ = NSApplication.shared
+        let suite = "KarutoTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.recording.frameRate == .fps30)
+        settings.recording = RecordingOptions(systemAudio: true)
+        let controller = SettingsController(settings: settings)
+        controller.show()
+        let window = try #require(NSApp.windows.first { $0.title == "Karuto Settings" })
+        window.orderOut(nil)
+        defer { window.close() }
+        let root = try #require(window.contentView)
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let recording = try #require(descendants(root).compactMap { $0 as? SettingsNavigationButton }
+            .first { $0.title == "Recording" })
+        recording.performClick(nil)
+        let views = descendants(root)
+        let rates = try #require(views.compactMap { $0 as? NSPopUpButton }.first { $0.accessibilityLabel() == "Frame rate" })
+        #expect(rates.itemTitles == ["30 fps", "60 fps", "120 fps"])
+        #expect(rates.selectedTag() == 30)
+        for rate in [RecordingFrameRate.fps60, .fps120] {
+            rates.selectItem(withTag: rate.rawValue)
+            _ = rates.sendAction(rates.action, to: rates.target)
+            #expect(AppSettings(defaults: defaults).recording.frameRate == rate)
+        }
+        let buttons = views.compactMap { $0 as? NSButton }
+        let system = try #require(buttons.first { $0.accessibilityLabel() == "System audio" })
+        let microphone = try #require(buttons.first { $0.accessibilityLabel() == "Microphone" })
+        let input = try #require(views.compactMap { $0 as? NSPopUpButton }
+            .first { $0.accessibilityLabel() == "Microphone input" })
+        let status = try #require(views.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "Microphone recording is disabled" })
+        #expect(system.state == .on)
+        #expect(microphone.state == .off)
+        #expect(system.image != nil)
+        #expect(microphone.image != nil)
+        #expect(!input.isEnabled)
+
+        microphone.performClick(nil)
+        #expect(settings.recording.systemAudio)
+        #expect(settings.recording.microphone)
+        #expect(input.isEnabled)
+        #expect(status.stringValue == "Microphone recording is enabled")
+
+        system.performClick(nil)
+        #expect(!settings.recording.systemAudio)
+        #expect(settings.recording.microphone)
+        #expect(input.isEnabled)
+
+        microphone.performClick(nil)
+        #expect(!settings.recording.systemAudio)
+        #expect(!settings.recording.microphone)
+        #expect(settings.recording.frameRate == .fps120)
+        #expect(!input.isEnabled)
+        #expect(status.stringValue == "Microphone recording is disabled")
+    }
+
+    @Test func preferencesHeaderSupportsBackgroundDragging() throws {
+        _ = NSApplication.shared
+        let suite = "KarutoTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = SettingsController(settings: AppSettings(defaults: defaults))
+        controller.show()
+        let window = try #require(NSApp.windows.first { $0.title == "Karuto Settings" })
+        window.orderOut(nil)
+        defer { window.close() }
+        let surface = try #require(window.contentView as? SettingsGlassSurface)
+        surface.layoutSubtreeIfNeeded()
+        // The visible blank header extends below the native title bar.
+        for x: CGFloat in [120, 450, 780] {
+            let point = NSPoint(x: x, y: surface.bounds.height - 40)
+            let hit = try #require(surface.hitTest(point))
+            #expect(hit.mouseDownCanMoveWindow, "Header hit view: \(type(of: hit))")
+        }
+        // Blank margins throughout the window, not only the title bar, must drag.
+        for x: CGFloat in [8, 225, 890] {
+            for y: CGFloat in [20, 180, 420, 640] {
+                let hit = try #require(surface.hitTest(NSPoint(x: x, y: y)))
+                #expect(hit.mouseDownCanMoveWindow, "Background hit view: \(type(of: hit))")
+            }
+        }
+        #expect(window.isMovable)
+        #expect(window.isMovableByWindowBackground)
+    }
+
     @Test func sidebarIdentityDoesNotOverlapNavigation() throws {
         _ = NSApplication.shared
         let suite = "KarutoTests." + UUID().uuidString

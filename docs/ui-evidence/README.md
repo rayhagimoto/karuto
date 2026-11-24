@@ -2,7 +2,7 @@
 
 [UI review criteria](../ui-review.md) · [Alpha validation](../alpha-validation.md)
 
-The current [appearance settings](settings-appearance-current.png) and [keyboard shortcuts](settings-shortcuts-current.png) images were captured from the running app. Shortcut assignments reflect the capture configuration. Individual-window captures omit the surrounding desktop and may flatten the appearance of glass/vibrancy.
+The [README feature gallery](../../README.md#features) shows Karuto’s capture overlay, recording setup, result preview, and settings. The Alder Ridge trail guide is an original sample document used to demonstrate annotations, Live Text, and scrolling capture. The [full stitched PNG](scrolling-result.png) combines overlapping views of that guide.
 
 The remaining images are historical UI evidence and may not reflect the current interface.
 

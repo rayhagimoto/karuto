@@ -7,9 +7,9 @@ final class CaptureCoordinator {
     private(set) var phase: Phase = .idle { didSet { onStateChange?() } }
     var onStateChange: (() -> Void)?
     private let engine = CaptureEngine()
-    private let captureUI = CaptureUIController()
+    private let captureUI: CaptureUIController
     private let previews = ResultPreviewController()
-    private let clipboard = CaptureClipboard()
+    private let clipboard: CaptureClipboard
     private var savePanel: NSSavePanel?
     private let controls = SessionControlsController()
     let settings: AppSettings
@@ -23,7 +23,6 @@ final class CaptureCoordinator {
     private var previousDisplayFrame: CGRect?
     private var catalog: CaptureCatalog?
     private var frozenDesktop: FrozenDesktop?
-    private var sessionPreferences: CaptureSessionPreferences?
     private var elapsedTask: Task<Void, Never>?
     private var recentArtifact: CaptureArtifact?
     private let automaticScroll = AutomaticScrollDriver()
@@ -33,30 +32,42 @@ final class CaptureCoordinator {
     private let scrollContentGuide = ScrollContentGuide()
     private var scrollingStarted: Date?
 
-    init(settings: AppSettings, store: CaptureStore) {
+    init(settings: AppSettings, store: CaptureStore, clipboard: CaptureClipboard = CaptureClipboard()) {
         self.settings = settings; self.store = store
+        self.clipboard = clipboard
+        captureUI = CaptureUIController(settings: settings)
         settingsUI = SettingsController(settings: settings)
         engine.capturableOwnWindowIDs = { [weak settingsUI = self.settingsUI] in
             settingsUI?.captureWindowIDs ?? []
         }
         captureUI.onScrollInputPoint = { [weak self] point in self?.scrollInputPoint = point }
-        captureUI.onCapture = { [weak self] mode, target in self?.perform(mode, target: target) }
+        captureUI.previousArea = { [weak self] in
+            guard let self, let previousArea, let previousDisplayFrame else { return nil }
+            return (previousArea, previousDisplayFrame)
+        }
+        captureUI.onCapture = { [weak self] mode, region, target, marks, destination in
+            self?.perform(mode, region: region, target: target, annotations: marks, destination: destination)
+        }
+        captureUI.samplePreview = { [weak self] target in
+            guard let self else { throw CancellationError() }
+            if let frozenDesktop { return try frozenDesktop.image(for: target) }
+            // Preview sampling runs independently of the final capture.
+            let sampler = CaptureEngine()
+            sampler.capturableOwnWindowIDs = engine.capturableOwnWindowIDs
+            return try await sampler.capture(target: target, options: ScreenshotOptions(includeShadow: false))
+        }
         captureUI.onCancel = { [weak self] in self?.cancel() }
-        captureUI.onInstantCaptureChange = { [weak self] enabled in self?.sessionPreferences?.instantCapture = enabled }
-        captureUI.onFreezeDisplayChange = { [weak self] enabled in
-            guard let self, var preferences = sessionPreferences else { return }
-            preferences.freezeDisplay = enabled
-            let mode = captureUI.selectedMode
-            // A new snapshot must be taken without selection windows on screen.
-            // Carry this session's overrides through the restart, not into defaults.
-            cancel { [weak self] in self?.beginSelection(initialMode: mode, preferences: preferences) }
+        captureUI.onSelectionSourceChange = { [weak self] previousMode in
+            guard let self, phase == .selecting else { return }
+            // Acquire the new source with the selection windows out of the way.
+            cancel { [weak self] in self?.beginSelection(previousMode: previousMode) }
         }
         captureUI.onOpenPreferences = { [weak self] in self?.showSettings() }
         captureUI.onOpenKeymap = { [weak self] in self?.showKeymap() }
         controls.onStop = { [weak self] in self?.stop() }
         controls.onCancel = { [weak self] in self?.cancel() }
         controls.onReselect = { [weak self] in
-            self?.cancel { [weak self] in self?.openToolbar(initialMode: .scrolling) }
+            self?.cancel { [weak self] in self?.openToolbar(initialRegion: .scrolling) }
         }
         controls.onManual = { [weak self] in self?.useManualScrolling("Scroll inside the selected content, then choose Finish.") }
         previews.onSave = { [weak self] in self?.saveAs($0) }
@@ -67,33 +78,36 @@ final class CaptureCoordinator {
         engine.onFailure = { [weak self] error in self?.streamFailed(error) }
     }
 
-    func openToolbar(initialMode: CaptureMode = .area) {
-        beginSelection(initialMode: initialMode, preferences: CaptureSessionPreferences(defaults: settings))
+    func openToolbar(initialRegion: CaptureRegion? = nil) {
+        guard phase == .idle else { return }
+        captureUI.ocrEnabled = false
+        captureUI.loadPreferences()
+        if let initialRegion { captureUI.setRegion(initialRegion) }
+        beginSelection()
     }
 
-    private func beginSelection(initialMode: CaptureMode, preferences: CaptureSessionPreferences) {
+    private func beginSelection(previousMode: CaptureMode? = nil) {
         guard phase == .idle else { return }
-        sessionPreferences = preferences
+        let freeze = captureUI.usesFrozenSelection
         let id = UUID(); operationID = id; phase = .selecting
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let frozen: FrozenDesktop?
                 let catalog: CaptureCatalog
-                if preferences.freezeDisplay {
+                if freeze {
                     let snapshot = try await engine.freezeDesktop()
                     frozen = snapshot
                     catalog = snapshot.catalog
                 } else {
                     frozen = nil
-                    catalog = try await engine.catalog()
+                    catalog = engine.selectionCatalog()
                 }
                 guard operationID == id, !Task.isCancelled else { return }
+                guard !catalog.displays.isEmpty else { throw CaptureError.targetMissing }
                 frozenDesktop = frozen
                 self.catalog = catalog; phase = .selecting
-                captureUI.instantCapture = preferences.instantCapture
-                captureUI.freezeDisplay = preferences.freezeDisplay
-                captureUI.present(catalog: catalog, initialMode: initialMode, frozenFrames: frozen?.frames ?? [:])
+                captureUI.present(catalog: catalog, frozenFrames: frozen?.frames ?? [:], previousMode: previousMode)
             } catch { fail(error, id: id) }
         }
     }
@@ -128,7 +142,9 @@ final class CaptureCoordinator {
     }
 
     func capturePrevious() {
+        if phase == .selecting { captureUI.handleShortcut(.selectLastArea); return }
         guard phase == .idle else { return }
+        captureUI.ocrEnabled = false
         guard let previousArea, case let .area(displayID, _) = previousArea else { openToolbar(); return }
         let id = UUID(); operationID = id; phase = .preparing
         task = Task { [weak self] in
@@ -139,49 +155,59 @@ final class CaptureCoordinator {
                 guard current.displays.first(where: { $0.id == displayID })?.frame == previousDisplayFrame else {
                     reset(); openToolbar(); return
                 }
-                catalog = current; perform(.area, target: previousArea)
+                catalog = current; perform(.snapshot, region: .area, target: previousArea)
             } catch { fail(error, id: id) }
         }
     }
 
-    private func perform(_ mode: CaptureMode, target: CaptureTarget) {
-        guard phase == .selecting || phase == .preparing else { return }
+    private func startFileSession() throws -> URL {
+        let session = try store.newSession()
+        directory = session
+        return session
+    }
+
+    private func perform(_ mode: CaptureMode, region: CaptureRegion, target: CaptureTarget,
+                         annotations: [AreaAnnotation] = [], destination: SnapshotDestination = .capturePreferences) {
+        guard (phase == .selecting || phase == .preparing), mode.supports(region) else { return }
+        let delaySeconds = settings.capturePreferences(for: mode).delaySeconds
         // Keep the same immutable pixels that were shown during selection.
         // Recording, scrolling and delayed captures always use live content.
-        let frozen = (mode == .area || mode == .fullscreen || mode == .window) ? frozenDesktop : nil
+        let frozen = mode == .snapshot && region != .scrolling && delaySeconds == 0 ? frozenDesktop : nil
         frozenDesktop = nil
         captureUI.dismiss()
-        if case let .area(displayID, _) = target {
+        if mode == .snapshot, case let .area(displayID, _) = target {
             previousArea = target; previousDisplayFrame = catalog?.displays.first(where: { $0.id == displayID })?.frame
         }
         let recordingOptions: RecordingOptions?
-        if mode == .recording {
-            recordingOptions = settingsUI.chooseRecordingOptions()
+        if mode == .screenRecording {
+            recordingOptions = settingsUI.chooseRecordingOptions(delaySeconds: delaySeconds)
             guard recordingOptions != nil else { reset(); return }
         } else { recordingOptions = nil }
         let id = UUID(); operationID = id; phase = .preparing
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                let session = try store.newSession(); directory = session
-                if mode == .timer || mode == .recording {
-                    for remaining in (1...3).reversed() {
+                if delaySeconds > 0 {
+                    for remaining in (1...delaySeconds).reversed() {
                         guard operationID == id else { return }
-                        controls.show(title: mode == .timer ? "Screenshot timer" : "Recording starts soon", message: "\(remaining)", stopTitle: "Cancel")
+                        controls.show(title: mode == .screenRecording ? "Recording starts soon" : "Snapshot starts soon",
+                                      message: "\(remaining)", stopTitle: "")
                         try await Task.sleep(for: .seconds(1))
                     }
                     controls.dismiss()
                 }
                 try Task.checkCancellation()
                 guard operationID == id else { return }
-                if mode == .recording, let options = recordingOptions {
+                if let options = recordingOptions {
+                    let session = try startFileSession()
                     controls.show(title: "Preparing recording", message: "Starting local capture…", stopTitle: "Cancel")
                     try await engine.startRecording(target: target, options: options, to: session.appendingPathComponent("Recording.mp4"))
                     guard operationID == id else { _ = try? await engine.stopRecording(); return }
                     phase = .recording
                     controls.show(title: "Recording", message: "00:00", stopTitle: "Stop", allowsCancel: false)
                     startClock(id: id)
-                } else if mode == .scrolling {
+                } else if region == .scrolling {
+                    let session = try startFileSession()
                     automaticScroll.prepare()
                     let sessionStitcher = try StitchingSession(directory: session, detectScrollContent: true)
                     stitcher = sessionStitcher; scrollingStarted = Date()
@@ -223,14 +249,21 @@ final class CaptureCoordinator {
                     } else {
                         image = try await engine.capture(target: target, options: ScreenshotOptions(includeShadow: settings.includeShadow))
                     }
-                    let captureStore = store
-                    let url = try await Task.detached(priority: .userInitiated) { try captureStore.writePNG(image, in: session) }.value
-                    guard operationID == id else { store.removeSession(session); return }
-                    await complete(CaptureArtifact(id: UUID(), url: url, kind: .image, width: image.width, height: image.height))
+                    let output: CGImage
+                    if case .area(_, let rect) = target, !annotations.isEmpty {
+                        output = try await Task.detached(priority: .userInitiated) {
+                            try AreaAnnotation.composite(annotations, over: image, size: rect.size)
+                        }.value
+                    } else { output = image }
+                    try Task.checkCancellation()
+                    guard operationID == id else { return }
+                    try await finishSnapshot(output, destination: destination)
                 }
             } catch is CancellationError {
                 if operationID == id { discardAndReset() }
-            } catch { fail(error, id: id) }
+            } catch {
+                fail(error, id: id)
+            }
         }
     }
 
@@ -351,18 +384,35 @@ final class CaptureCoordinator {
         }
     }
 
-    private func complete(_ artifact: CaptureArtifact) async {
+    func finishSnapshot(_ image: CGImage, destination: SnapshotDestination) async throws {
+        let id = operationID
+        if destination == .clipboard {
+            try await clipboard.copy(image)
+            if operationID == id { reset() }
+            return
+        }
+
+        let session = try startFileSession()
+        let url = try await Task.detached(priority: .userInitiated) { [store] in
+            try store.writePNG(image, in: session)
+        }.value
+        guard operationID == id else { store.removeSession(session); return }
+        let artifact = CaptureArtifact(id: UUID(), url: url, kind: .image, width: image.width, height: image.height)
+        await complete(artifact, saveOnly: destination == .saveFolder)
+    }
+
+    private func complete(_ artifact: CaptureArtifact, saveOnly: Bool = false) async {
         phase = .finalizing
         var result = artifact
         var saveError: Error?
         var clipboardError: Error?
         let captureStore = store
-        if settings.autoSave {
+        if saveOnly || settings.automaticallySaves(artifact.kind) {
             let folder = settings.saveFolder
             do { result = try await Task.detached(priority: .userInitiated) { try captureStore.save(artifact, folder: folder) }.value }
             catch { saveError = error }
         }
-        if settings.autoCopyScreenshots && result.kind == .image {
+        if !saveOnly && settings.autoCopyScreenshots && result.kind == .image {
             do { try await clipboard.copy(result) }
             catch is CancellationError { } // A newer explicit copy request takes precedence.
             catch { clipboardError = error }
@@ -370,7 +420,7 @@ final class CaptureCoordinator {
         recentArtifact = result
         previews.show(result, autoDismissAfter: settings.previewDismissInterval)
         reset()
-        if let saveError { showError(saveError, title: "Capture saved temporarily; automatic save failed") }
+        if let saveError { showError(saveError, title: "Couldn’t save to the selected folder. A temporary copy is available.") }
         if let clipboardError { showError(clipboardError, title: "Capture saved; clipboard copy failed") }
     }
 
@@ -378,7 +428,7 @@ final class CaptureCoordinator {
         automaticScroll.stop(); scrollingAutomatically = false; scrollingNeedsAdjustment = false
         scrollContentGuide.dismiss(); scrollInputPoint = nil
         controls.dismiss(); elapsedTask?.cancel(); elapsedTask = nil
-        stitcher = nil; directory = nil; operationID = nil; scrollingStarted = nil; frozenDesktop = nil; sessionPreferences = nil; phase = .idle
+        stitcher = nil; directory = nil; operationID = nil; scrollingStarted = nil; frozenDesktop = nil; phase = .idle
     }
     private func discardAndReset() {
         if let directory { store.removeSession(directory) }

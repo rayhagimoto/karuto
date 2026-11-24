@@ -54,6 +54,9 @@ final class CaptureModeButton: ClosureButton {
     override var state: NSControl.StateValue {
         didSet { updateAppearance() }
     }
+    override var isEnabled: Bool {
+        didSet { updateAppearance() }
+    }
     override var intrinsicContentSize: NSSize { NSSize(width: 80, height: 54) }
     // This button draws explicit rows, not the native bezel. Native image-based
     // alignment insets otherwise extend its layer above the stack's 5pt padding.
@@ -120,7 +123,7 @@ final class CaptureModeButton: ClosureButton {
         // this view's drawing appearance. Palette images and CGColors resolve
         // immediately, so use the view's override rather than the system theme.
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let tint = NSColor.labelColor.withAlphaComponent(state == .on ? 1 : 0.72)
+            let tint = isEnabled ? NSColor.labelColor.withAlphaComponent(state == .on ? 1 : 0.72) : NSColor.disabledControlTextColor
             let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
                 .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
             iconView.image = image?.withSymbolConfiguration(configuration)
@@ -135,10 +138,84 @@ final class CaptureModeButton: ClosureButton {
 }
 
 @MainActor
+final class CaptureModeSelector: NSStackView {
+    private let selection = CALayer()
+    private weak var selectedButton: CaptureActionButton?
+
+    init(buttons: [CaptureActionButton]) {
+        super.init(frame: .zero)
+        spacing = 2
+        distribution = .fillEqually
+        wantsLayer = true
+        selection.cornerRadius = 7
+        layer?.insertSublayer(selection, at: 0)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.radioGroup)
+        setAccessibilityLabel("Capture mode")
+        for button in buttons {
+            button.showsBackground = false
+            button.setAccessibilityRole(.radioButton)
+            addArrangedSubview(button)
+        }
+        updateSelectionColor()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func select(_ index: Int) {
+        guard let button = arrangedSubviews[index] as? CaptureActionButton, button !== selectedButton else { return }
+        let shouldAnimate = selectedButton != nil && window?.isVisible == true
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        selectedButton?.setAccessibilityValue(0)
+        button.setAccessibilityValue(1)
+        selectedButton = button
+        positionSelection(animated: shouldAnimate)
+    }
+
+    override func layout() {
+        super.layout()
+        positionSelection(animated: false)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateSelectionColor()
+    }
+
+    private func updateSelectionColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            selection.backgroundColor = NSColor.labelColor.withAlphaComponent(0.13).cgColor
+        }
+    }
+
+    private func positionSelection(animated: Bool) {
+        guard let button = selectedButton, selection.frame != button.frame else { return }
+        let previous = selection.animation(forKey: "position") == nil
+            ? selection.position : selection.presentation()?.position ?? selection.position
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        selection.frame = button.frame
+        CATransaction.commit()
+        if animated {
+            let slide = CABasicAnimation(keyPath: "position")
+            slide.fromValue = previous
+            slide.toValue = selection.position
+            slide.duration = 0.22
+            slide.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            selection.add(slide, forKey: "position")
+        } else {
+            selection.removeAnimation(forKey: "position")
+        }
+    }
+}
+
+@MainActor
 final class CaptureActionButton: ClosureButton {
     var emphasized = false
+    var showsBackground = true
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize {
+        if title.isEmpty { return NSSize(width: 26, height: 26) }
         let textWidth = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width
         return NSSize(width: ceil(textWidth) + 24 + (image == nil ? 0 : 20), height: 26)
     }
@@ -152,20 +229,30 @@ final class CaptureActionButton: ClosureButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func draw(_ dirtyRect: NSRect) {
-        let fill: CGFloat = isHighlighted ? 0.22 : emphasized ? 0.13 : 0.06
-        NSColor.labelColor.withAlphaComponent(isEnabled ? fill : 0.03).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
-        let tint = (contentTintColor ?? .labelColor).withAlphaComponent(isEnabled ? 0.9 : 0.3)
-        var textX: CGFloat = 12
-        if let image {
-            image.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [tint]))?.draw(
-                in: NSRect(x: 12, y: bounds.midY - 6, width: 12, height: 12), from: .zero,
-                operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            textX += 20
+        if showsBackground || isHighlighted {
+            let fill: CGFloat = isHighlighted ? 0.22 : emphasized || state == .on ? 0.13 : 0.06
+            NSColor.labelColor.withAlphaComponent(isEnabled ? fill : 0.03).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
         }
+        let tint = (contentTintColor ?? .labelColor).withAlphaComponent(isEnabled ? 0.9 : 0.3)
         let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: tint]
         let textSize = (title as NSString).size(withAttributes: attributes)
-        (title as NSString).draw(at: NSPoint(x: textX, y: (bounds.height - textSize.height) / 2), withAttributes: attributes)
+        let iconWidth: CGFloat = image == nil ? 0 : 20
+        let contentX = (bounds.width - textSize.width - iconWidth) / 2
+        if let image {
+            let size: CGFloat = 14
+            let iconX = title.isEmpty ? bounds.midX - size / 2 : contentX
+            let configuration = NSImage.SymbolConfiguration(paletteColors: [tint])
+            if let symbol = image.withSymbolConfiguration(configuration) {
+                let scale = size / max(symbol.size.width, symbol.size.height)
+                let width = symbol.size.width * scale
+                let height = symbol.size.height * scale
+                symbol.draw(in: NSRect(x: iconX + (size - width) / 2, y: bounds.midY - height / 2,
+                                       width: width, height: height), from: .zero,
+                            operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+        }
+        (title as NSString).draw(at: NSPoint(x: contentX + iconWidth, y: (bounds.height - textSize.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
             NSColor.labelColor.withAlphaComponent(0.25).setStroke()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).stroke()

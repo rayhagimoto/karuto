@@ -42,6 +42,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
         window.title = "Karuto Settings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        // The full-size glass header extends below the native title-bar strip.
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentMinSize = NSSize(width: 900, height: 680)
@@ -176,7 +178,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
             autoSave.state = settings.autoSave ? .on : .off
             autoSave.setAccessibilityLabel("Automatically save captures")
             let group = SettingsCard()
-            group.addRow(title: "Automatically save captures", detail: "Keep a copy in your save folder.", control: autoSave)
+            group.addRow(title: "Automatically save captures", detail: "Save image captures to your save folder. Screen recordings always save there.", control: autoSave)
             let choose = ClosureButton(title: "Choose…") { [weak self] in self?.chooseFolder() }
             group.addRow(title: "Save folder", detail: settings.saveFolder.path, control: choose)
             folderLabel = group.lastDetailLabel
@@ -213,17 +215,17 @@ final class SettingsController: NSObject, NSWindowDelegate {
             let instant = NSButton(checkboxWithTitle: "", target: self, action: #selector(instantCaptureChanged(_:)))
             instant.state = settings.instantCapture ? .on : .off
             instant.setAccessibilityLabel("Instant Capture")
-            group.addRow(title: "Instant Capture", detail: "Default for new sessions: capture on mouse release.", control: instant)
+            group.addRow(title: "Instant Capture", detail: "Capture Area snapshots on mouse release.", control: instant)
             let freeze = NSButton(checkboxWithTitle: "", target: self, action: #selector(freezeDisplayChanged(_:)))
             freeze.state = settings.freezeDisplay ? .on : .off
             freeze.setAccessibilityLabel("Freeze Display During Capture")
-            group.addRow(title: "Freeze Display", detail: "Default for new sessions: select from a still image.", control: freeze)
+            group.addRow(title: "Freeze Display", detail: "Select from a still image when taking a snapshot with the timer off.", control: freeze)
             let automatic = NSButton(checkboxWithTitle: "", target: self, action: #selector(automaticScrollingChanged(_:)))
             automatic.state = settings.automaticScrolling ? .on : .off
             automatic.setAccessibilityLabel("Automatically scroll")
             group.addRow(title: "Automatically scroll", detail: "Scroll for you during Appshot capture. Switch to manual at any time.", control: automatic)
             addCard(group, to: column)
-            column.addArrangedSubview(captureLabel("Overlay changes apply to that session only.", size: 12))
+            column.addArrangedSubview(captureLabel("The capture toolbar remembers options separately for Snapshot and Screen Recording.", size: 12))
         case .shortcuts:
             if let keymap {
                 let editor = KeymapSettingsView(keymap: keymap)
@@ -239,7 +241,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
                 self.settings.recording = options.options
             }
             addCard(options, to: column)
-            column.addArrangedSubview(captureLabel("MP4 · H.264 · 30 fps · Three-second countdown", size: 12))
+            column.addArrangedSubview(captureLabel("MP4 · H.264", size: 12))
         }
     }
 
@@ -276,45 +278,56 @@ final class SettingsController: NSObject, NSWindowDelegate {
             folderLabel?.toolTip = url.path
         }
     }
-    func chooseRecordingOptions() -> RecordingOptions? {
-        let panel = RecordingOptionsPanel(contentRect: CGRect(x: 0, y: 0, width: 500, height: 620), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+    func chooseRecordingOptions(delaySeconds: Int) -> RecordingOptions? {
+        let size = NSSize(width: 480, height: 372)
+        let frame = NSRect(origin: .zero, size: size)
+        let panel = RecordingOptionsPanel(contentRect: frame, styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         panel.title = "Screen Recording"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.isReleasedWhenClosed = false
-        panel.contentMinSize = NSSize(width: 500, height: 620)
+        panel.contentMinSize = size
         let surface = SettingsGlassSurface()
-        surface.frame = NSRect(x: 0, y: 0, width: 500, height: 620)
+        surface.frame = frame
         surface.autoresizingMask = [.width, .height]
         panel.contentView = surface
         let root = surface.content
-        panel.setContentSize(NSSize(width: 500, height: 620))
+        panel.setContentSize(size)
         let column = NSStackView()
-        column.orientation = .vertical; column.alignment = .leading; column.spacing = 18
+        column.orientation = .vertical; column.alignment = .leading; column.spacing = 20
         column.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(column)
         NSLayoutConstraint.activate([
             column.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
             column.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
             column.topAnchor.constraint(equalTo: root.topAnchor, constant: 46),
-            column.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -28)
+            column.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -24)
         ])
-        let heading = captureLabel("Screen Recording", size: 20, color: .labelColor)
-        heading.font = .systemFont(ofSize: 20, weight: .semibold)
+        let heading = captureLabel("Screen Recording", size: 24, color: .labelColor)
+        heading.font = .systemFont(ofSize: 24, weight: .semibold)
         column.addArrangedSubview(heading)
         let form = RecordingOptionsForm(options: settings.recording)
         addCard(form, to: column)
-        column.addArrangedSubview(captureLabel("MP4 · 30 fps · Starts after a three-second countdown", size: 12))
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal; buttons.spacing = 10
-        let cancel = ClosureButton(title: "Cancel") { NSApp.stopModal(withCode: .cancel) }
-        let start = ClosureButton(title: "Start Recording", symbol: "record.circle") { NSApp.stopModal(withCode: .OK) }
-        styleSettingsButton(cancel)
-        styleSettingsButton(start)
-        buttons.addArrangedSubview(cancel); buttons.addArrangedSubview(start)
-        column.addArrangedSubview(buttons)
+
+        let format = NSStackView(views: [
+            captureLabel("MP4 · H.264"),
+            captureLabel(delaySeconds == 0 ? "No countdown" : "\(delaySeconds)-second countdown")
+        ])
+        format.orientation = .vertical
+        format.alignment = .leading
+        format.spacing = 2
+        let cancel = CaptureActionButton(title: "Cancel") { NSApp.stopModal(withCode: .cancel) }
+        let start = CaptureActionButton(title: "Start Recording") { NSApp.stopModal(withCode: .OK) }
+        start.emphasized = true
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let footer = NSStackView(views: [format, spacer, cancel, start])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 8
+        addCard(footer, to: column)
         panel.center()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -360,6 +373,7 @@ private enum SettingsSection: String, CaseIterable {
 @MainActor
 private class SettingsCard: NSView {
     private let rows = NSStackView()
+    var showsDividers = true
     private(set) var lastDetailLabel: NSTextField?
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -374,11 +388,6 @@ private class SettingsCard: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func addRow(title: String, detail: String? = nil, control: NSView) {
-        if !rows.arrangedSubviews.isEmpty {
-            let divider = NSBox(); divider.boxType = .separator
-            rows.addArrangedSubview(divider)
-            divider.widthAnchor.constraint(equalTo: rows.widthAnchor, constant: -40).isActive = true
-        }
         let row = NSStackView()
         row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 20
         row.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
@@ -402,6 +411,15 @@ private class SettingsCard: NSView {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         row.addArrangedSubview(spacer)
         row.addArrangedSubview(control)
+        addRow(row)
+    }
+
+    func addRow(_ row: NSView) {
+        if showsDividers && !rows.arrangedSubviews.isEmpty {
+            let divider = NSBox(); divider.boxType = .separator
+            rows.addArrangedSubview(divider)
+            divider.widthAnchor.constraint(equalTo: rows.widthAnchor, constant: -40).isActive = true
+        }
         rows.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
     }
@@ -579,50 +597,148 @@ private final class PreviewSettingsForm: SettingsCard {
 }
 
 @MainActor
-private final class RecordingOptionsForm: SettingsCard {
+private final class RecordingAudioButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+}
+
+@MainActor
+private final class RecordingOptionsForm: NSStackView {
     var onChange: (() -> Void)?
-    private let system = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let microphone = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let cursor = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let systemAudio = RecordingAudioButton()
+    private let microphone = RecordingAudioButton()
+    private let microphoneStatus = captureLabel("", size: 10)
+    private let cursor = NSButton(checkboxWithTitle: "Show pointer", target: nil, action: nil)
     private let devices: [AVCaptureDevice]
     private let deviceMenu = NSPopUpButton()
     private let resolution = NSPopUpButton()
+    private let frameRate = NSPopUpButton()
 
     init(options: RecordingOptions) {
         devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified).devices
         super.init(frame: .zero)
-        system.state = options.systemAudio ? .on : .off
+        orientation = .vertical
+        alignment = .leading
+        spacing = 16
+        systemAudio.state = options.systemAudio ? .on : .off
         microphone.state = options.microphone ? .on : .off
         cursor.state = options.showsCursor ? .on : .off
-        for (button, title) in [(system, "System audio"), (microphone, "Microphone"), (cursor, "Show pointer")] {
-            button.target = self; button.action = #selector(changed)
-            button.setAccessibilityLabel(title)
+        for (control, title) in [(systemAudio, "System audio"), (microphone, "Microphone"), (cursor, "Show pointer")] {
+            control.target = self
+            control.action = #selector(changed)
+            control.setAccessibilityLabel(title)
         }
         deviceMenu.addItem(withTitle: "System default")
         devices.forEach { deviceMenu.addItem(withTitle: $0.localizedName) }
         if let id = options.microphoneID, let index = devices.firstIndex(where: { $0.uniqueID == id }) { deviceMenu.selectItem(at: index + 1) }
         deviceMenu.target = self; deviceMenu.action = #selector(changed)
         deviceMenu.setAccessibilityLabel("Microphone input")
-        deviceMenu.widthAnchor.constraint(lessThanOrEqualToConstant: 180).isActive = true
-        deviceMenu.isEnabled = microphone.state == .on
-        resolution.addItems(withTitles: ["1080p", "Native resolution"])
+        deviceMenu.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        resolution.addItems(withTitles: ["1080p", "Native"])
         resolution.selectItem(at: options.resolution == .native ? 1 : 0)
         resolution.target = self; resolution.action = #selector(changed)
         resolution.setAccessibilityLabel("Video resolution")
-        addRow(title: "Resolution", control: resolution)
-        addRow(title: "System audio", control: system)
-        addRow(title: "Microphone", control: microphone)
-        addRow(title: "Input device", control: deviceMenu)
-        addRow(title: "Show pointer", control: cursor)
+        for rate in RecordingFrameRate.allCases {
+            frameRate.addItem(withTitle: "\(rate.rawValue) fps")
+            frameRate.lastItem?.tag = rate.rawValue
+        }
+        frameRate.selectItem(withTag: options.frameRate.rawValue)
+        frameRate.target = self
+        frameRate.action = #selector(changed)
+        frameRate.setAccessibilityLabel("Frame rate")
+        let audio = SettingsCard()
+        audio.showsDividers = false
+        audio.addRow(audioRow("System audio", toggle: systemAudio, detail: captureLabel("Sound from apps on your Mac")))
+        audio.addRow(audioRow("Microphone", toggle: microphone, detail: microphoneStatus, input: deviceMenu))
+        let resolutionLabel = captureLabel("Resolution", size: 13, color: .labelColor)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let video = NSStackView(views: [resolutionLabel, resolution, spacer, cursor])
+        video.orientation = .horizontal
+        video.alignment = .centerY
+        video.spacing = 8
+        video.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        let rateRow = NSStackView(views: [captureLabel("Frame rate", size: 13, color: .labelColor), frameRate])
+        rateRow.alignment = .centerY
+        rateRow.spacing = video.spacing
+        rateRow.edgeInsets = video.edgeInsets
+        rateRow.addArrangedSubview(NSView())
+        for group in [audio as NSView, video, rateRow] {
+            addArrangedSubview(group)
+            group.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
+        }
+        refreshAudioControls()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    @objc private func changed() { deviceMenu.isEnabled = microphone.state == .on; onChange?() }
+
+    private func audioRow(_ title: String, toggle: NSButton, detail: NSTextField, input: NSPopUpButton? = nil) -> NSView {
+        toggle.setButtonType(.pushOnPushOff)
+        toggle.isBordered = false
+        toggle.focusRingType = .exterior
+        toggle.imagePosition = .imageOnly
+        toggle.wantsLayer = true
+        toggle.layer?.cornerRadius = 18
+        toggle.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        toggle.heightAnchor.constraint(equalToConstant: 36).isActive = true
+
+        let name = captureLabel(title, size: 13, color: .labelColor)
+        name.font = .systemFont(ofSize: 13, weight: .medium)
+        let labels = NSStackView(views: [name, detail])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 4
+        let row = NSStackView(views: [toggle, labels])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        if let input {
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            row.addArrangedSubview(spacer)
+            row.addArrangedSubview(input)
+        }
+        return row
+    }
+
+    private func refreshAudioControls() {
+        for (toggle, title, enabledSymbol, disabledSymbol) in [
+            (systemAudio, "System audio", "speaker.wave.2.fill", "speaker.slash.fill"),
+            (microphone, "Microphone", "mic.fill", "mic.slash.fill")
+        ] {
+            let enabled = toggle.state == .on
+            let symbol = enabled ? enabledSymbol : disabledSymbol
+            toggle.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 18, weight: .regular))
+            toggle.contentTintColor = enabled ? .alternateSelectedControlTextColor : .secondaryLabelColor
+            toggle.effectiveAppearance.performAsCurrentDrawingAppearance {
+                let background = enabled ? NSColor.controlAccentColor : NSColor.labelColor.withAlphaComponent(0.08)
+                toggle.layer?.backgroundColor = background.cgColor
+            }
+            toggle.toolTip = enabled ? "Turn off \(title.lowercased()) recording" : "Turn on \(title.lowercased()) recording"
+        }
+        let microphoneEnabled = microphone.state == .on
+        microphoneStatus.stringValue = microphoneEnabled ? "Microphone recording is enabled" : "Microphone recording is disabled"
+        deviceMenu.isEnabled = microphoneEnabled
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAudioControls()
+    }
+
+    @objc private func changed() {
+        refreshAudioControls()
+        onChange?()
+    }
+
     var options: RecordingOptions {
         let index = deviceMenu.indexOfSelectedItem - 1
-        return RecordingOptions(systemAudio: system.state == .on, microphone: microphone.state == .on,
+        return RecordingOptions(systemAudio: systemAudio.state == .on, microphone: microphone.state == .on,
                                 microphoneID: devices.indices.contains(index) ? devices[index].uniqueID : nil,
                                 showsCursor: cursor.state == .on,
-                                resolution: resolution.indexOfSelectedItem == 1 ? .native : .hd1080)
+                                resolution: resolution.indexOfSelectedItem == 1 ? .native : .hd1080,
+                                frameRate: RecordingFrameRate(rawValue: frameRate.selectedTag()) ?? .fps30)
     }
 }
 

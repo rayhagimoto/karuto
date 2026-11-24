@@ -1,0 +1,8 @@
+Karuto's numbered-circle geometry in AreaAnnotation.swift adapts CircleCountTool
+from Flameshot, copyright 2017–2019 Alejandro Sirgo Rica & Contributors.
+Karuto's 2026 adaptation draws the circle, pointer and label with Core Graphics
+and Core Text. The adapted file is licensed under GPL-3.0-or-later. See the
+accompanying Flameshot-GPL-3.0.txt.
+
+Upstream revision dcc3bd3175495e04832c4aac0868f1dd15aba2ca
+https://github.com/flameshot-org/flameshot/blob/dcc3bd3175495e04832c4aac0868f1dd15aba2ca/src/tools/circlecount/circlecounttool.cpp

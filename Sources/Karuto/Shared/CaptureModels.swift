@@ -1,16 +1,31 @@
 import Foundation
 import CoreGraphics
 
+enum SnapshotDestination: Sendable { case capturePreferences, clipboard, saveFolder }
+
 enum CaptureMode: String, CaseIterable, Sendable {
-    case area, fullscreen, window, scrolling, timer, recording
+    case snapshot, screenRecording
+
+    var title: String {
+        switch self {
+        case .snapshot: "Snapshot"
+        case .screenRecording: "Screen Recording"
+        }
+    }
+
+    func supports(_ region: CaptureRegion) -> Bool {
+        self == .snapshot || region != .scrolling
+    }
+}
+
+enum CaptureRegion: String, CaseIterable, Sendable {
+    case area, fullscreen, window, scrolling
     var title: String {
         switch self {
         case .area: "Area"
         case .fullscreen: "Fullscreen"
         case .window: "Window"
         case .scrolling: "Scrolling"
-        case .timer: "Timer"
-        case .recording: "Recording"
         }
     }
 }
@@ -51,12 +66,17 @@ enum RecordingResolution: String, CaseIterable, Sendable {
     case hd1080, native
 }
 
+enum RecordingFrameRate: Int, CaseIterable, Sendable {
+    case fps30 = 30, fps60 = 60, fps120 = 120
+}
+
 struct RecordingOptions: Sendable {
     var systemAudio = false
     var microphone = false
     var microphoneID: String? = nil
     var showsCursor = true
     var resolution: RecordingResolution = .hd1080
+    var frameRate: RecordingFrameRate = .fps30
 }
 
 struct RecordingResult: Sendable {

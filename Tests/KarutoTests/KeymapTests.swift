@@ -16,6 +16,36 @@ struct KeymapTests {
         #expect(try decoded.validated() == edited)
     }
 
+    @Test func existingCustomBindingsWinOverNewEditorDefaults() throws {
+        let fixture = Fixture()
+        let recall = try #require(ShortcutAction.selectLastArea.defaultBinding)
+        let old = KeymapConfiguration().setting(recall, for: .areaMode)
+        fixture.defaults.set(try JSONEncoder().encode(old), forKey: "keymap.v1")
+        #expect(fixture.settings.keymap.binding(for: .selectLastArea) == nil)
+        #expect(fixture.settings.keymap.binding(for: .areaMode) == recall)
+        #expect(fixture.settings.keymap.binding(for: .undoAnnotation) == ShortcutAction.undoAnnotation.defaultBinding)
+    }
+
+    @Test func copyAndSaveDefaultsRespectExistingBindingsAndExplicitClears() throws {
+        let fixture = Fixture()
+        let copy = ShortcutBinding(keyCode: 8, modifiers: .command)
+        let save = ShortcutBinding(keyCode: 1, modifiers: .command)
+        #expect(fixture.settings.keymap.binding(for: .copyScreenshot) == copy)
+        #expect(fixture.settings.keymap.binding(for: .saveScreenshot) == save)
+        let old = KeymapConfiguration().setting(copy, for: .previousArea).setting(save, for: .confirmCapture)
+        fixture.defaults.set(try JSONEncoder().encode(old), forKey: "keymap.v1")
+        let migrated = fixture.settings.keymap
+        #expect(migrated.binding(for: .copyScreenshot) == nil)
+        #expect(migrated.binding(for: .saveScreenshot) == nil)
+        #expect(migrated.binding(for: .previousArea) == copy)
+        #expect(migrated.binding(for: .confirmCapture) == save)
+        let replacement = ShortcutBinding(keyCode: 7, modifiers: [.option, .command])
+        fixture.settings.keymap = migrated.setting(replacement, for: .copyScreenshot).setting(nil, for: .saveScreenshot)
+        let reopened = AppSettings(defaults: fixture.defaults).keymap
+        #expect(reopened.binding(for: .copyScreenshot) == replacement)
+        #expect(reopened.binding(for: .saveScreenshot) == nil)
+    }
+
     @Test func duplicateAcrossScopesAndUnsafeGlobalBindingAreRejected() throws {
         let defaults = KeymapConfiguration()
         let appChord = try #require(defaults.binding(for: .preferences))

@@ -47,11 +47,11 @@ Requires one target and `--output`. Select a target with `--display ID`, `--wind
 
 ```sh
 scripts/karuto record --display 1 --duration 5 --output /tmp/demo.mp4
-scripts/karuto record --window 42 --duration 10 --native --system-audio --output /tmp/window.mp4
+scripts/karuto record --window 42 --duration 10 --fps 120 --native --system-audio --output /tmp/window.mp4
 scripts/karuto record --area 1 0 0 800 600 --duration 3 --no-cursor --output /tmp/area.mp4
 ```
 
-Accepts the same target syntax. `--duration` is required and must be 0.1–3600 seconds. Output is H.264 MP4 at 30 fps. Resolution defaults to 1080p; `--native` requests native resolution. `--system-audio` and `--microphone` opt into audio; `--no-cursor` hides the pointer. The success object contains `path`, `type`, `width`, `height`, and recorded `duration`. Startup and finalization add time beyond the requested duration. Run a separate process for each recording; this CLI does not provide pause or remote stop.
+Accepts the same target syntax. `--duration` is required and must be 0.1–3600 seconds. Output is H.264 MP4. Use `--fps 30`, `--fps 60`, or `--fps 120` to set the maximum recording frame rate. The default is 30 fps. Actual frame delivery depends on the display and changes in the captured content. Resolution defaults to 1080p; `--native` requests native resolution. `--system-audio` and `--microphone` opt into audio; `--no-cursor` hides the pointer. The success object contains `path`, `type`, `width`, `height`, and recorded `duration`. Startup and finalization add time beyond the requested duration. Run a separate process for each recording; this CLI does not provide pause or remote stop.
 
 For both capture commands, the output parent must exist and the output must not already exist. The CLI creates a temporary sibling and moves it into place after success; it does not overwrite existing output. Failed operations attempt to remove the temporary file. `SIGKILL` or a crash can leave a `.karuto-*` temporary file. Capture output is never automatically copied to the clipboard.
 

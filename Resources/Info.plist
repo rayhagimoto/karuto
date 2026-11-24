@@ -5,6 +5,7 @@
 <key>CFBundleIdentifier</key><string>local.karuto.app</string>
 <key>CFBundleName</key><string>Karuto</string>
 <key>CFBundleDisplayName</key><string>Karuto</string>
+<key>NSHumanReadableCopyright</key><string>Karuto is licensed under the GNU General Public License, version 3 or later.</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>

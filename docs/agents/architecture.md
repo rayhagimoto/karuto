@@ -9,7 +9,7 @@ Start with `docs/implementation-plan.md`. All capture target geometry crossing m
 - Appshots agent: `stitcher/`, `Sources/CStitcher/`, `Sources/Karuto/Appshots/`, `Tests/KarutoTests/Stitch*`.
 - Orchestrator: Shared, App, Storage, entry point, Package.swift, scripts, Resources, integration tests and documentation.
 
-No agent edits another owner's files. Propose interface changes to the orchestrator. Compile errors in another module should be reported, not repaired without reassignment. Use only public Apple APIs. No browser plugin, browser runtime, browser automation, network client, telemetry, or image editor.
+No agent edits another owner's files. Propose interface changes to the orchestrator. Compile errors in another module should be reported, not repaired without reassignment. Use only public Apple APIs. No browser plugin, browser runtime, browser automation, network client or telemetry.
 
 ## Capture engine contract
 
@@ -17,7 +17,7 @@ No agent edits another owner's files. Propose interface changes to the orchestra
 
 ## UI contract
 
-`@MainActor final class CaptureUIController`: `init()`, `var onCapture: ((CaptureMode, CaptureTarget) -> Void)?`, `var onCancel: (() -> Void)?`, `present(catalog: CaptureCatalog, initialMode: CaptureMode = .area, frozenFrames: [UInt32: CGImage] = [:])`, `dismiss()`. Area target rect is global AppKit points. Window IDs come from catalog; select by actual frontmost hit. In Recording mode support area/display/window through a small target-kind choice. Area accepts the first mouse-down even while the toolbar is key, and, when Instant Capture is enabled, captures once on release of a valid drag after committing the final pointer coordinates. With Instant Capture disabled it keeps the selection adjustable until Return/Capture. Dismissal and mode changes cancel pending gestures. Other modes retain Enter or Capture confirmation; manually entered area dimensions also support Return. `@MainActor final class ResultPreviewController`: `init()`, `show(_ artifact: CaptureArtifact)`, callback properties `onSave`, `onCopy`, `onReveal`, `onDismiss` of type `((CaptureArtifact) -> Void)?`; implement local file dragging and video open within UI. `@MainActor final class SessionControlsController`: `init()`, `var onStop: (() -> Void)?`, `var onCancel: (() -> Void)?`, `show(title: String, message: String, stopTitle: String)`, `update(message: String)`, `dismiss()`. This floating controller serves countdown, recording and scrolling. No settings UI is required from UI agent; orchestrator owns it.
+`@MainActor final class CaptureUIController`: `init(settings: AppSettings? = nil)`, `var onCapture: ((CaptureMode, CaptureRegion, CaptureTarget, [AreaAnnotation]) -> Void)?`, `var onCancel: (() -> Void)?`, `present(catalog: CaptureCatalog, initialRegion: CaptureRegion? = nil, frozenFrames: [UInt32: CGImage] = [:])`, `dismiss()`. Area target rect is global AppKit points. Window IDs come from catalog; select by actual frontmost hit. Snapshot and Screen Recording share the region controls. Scrolling is disabled for Screen Recording. The toolbar hides during area drags and fades back in after a 200 ms pause. Area accepts the first mouse-down even while the toolbar is key, and, when Instant Capture is enabled, captures once on release of a valid drag after committing the final pointer coordinates. With Instant Capture disabled it keeps the selection adjustable until Return/Capture. Dismissal and mode changes cancel pending gestures. Other modes retain Enter or Capture confirmation; manually entered area dimensions also support Return. `@MainActor final class ResultPreviewController`: `init()`, `show(_ artifact: CaptureArtifact)`, callback properties `onSave`, `onCopy`, `onReveal`, `onDismiss` of type `((CaptureArtifact) -> Void)?`; implement local file dragging and video open within UI. `@MainActor final class SessionControlsController`: `init()`, `var onStop: (() -> Void)?`, `var onCancel: (() -> Void)?`, `show(title: String, message: String, stopTitle: String)`, `update(message: String)`, `dismiss()`. This floating controller serves countdown, recording and scrolling. No settings UI is required from UI agent; orchestrator owns it.
 
 ## Appshots contract
 
@@ -35,7 +35,7 @@ Production scrolling sessions use `StitchingSession(directory:detectScrollConten
 
 The application coordinator owns the capture lifecycle and user-visible transitions; views dispatch intent and render state. Capture owns all ScreenCaptureKit objects, permission checks, display-coordinate conversion, and stream cleanup. Storage owns local file creation and retention. Appshots owns the synchronous Swift/Rust boundary and bounded disk-backed image assembly. Shared value types carry targets, options, and finished artifacts without exposing framework capture objects to other modules.
 
-Future annotation, OCR, and background composition should consume finished `CaptureArtifact` files in separate modules. They do not belong in the frame callback or capture engine. Persistent history should extend local storage with an index rather than keep decoded images in the coordinator. Recording export/transcoding belongs after capture finalization. Add these seams when implementing the relevant feature; the alpha has no placeholder plugin system or unused service abstractions.
+Area annotations use bottom-left coordinates relative to the selected rectangle. The overlay owns undo history, and the coordinator composites marks onto the final live or frozen screenshot before PNG encoding. Scrolling and recording bypass the editor. Persistent history should extend local storage with an index rather than keep decoded images in the coordinator. Recording export/transcoding belongs after capture finalization. Add these seams when implementing the relevant feature; the alpha has no placeholder plugin system or unused service abstractions.
 
 ### Clipboard and preview actions
 
@@ -49,7 +49,7 @@ Preview hover tracking covers the whole panel, including its controls. Leaving a
 
 ## UI reference and review
 
-The capture toolbar is based on the all-in-one reference: charcoal rounded mode group, icon-over-label buttons, and separate width × height controls. The screenshot workflow asset depicts annotation and is not a capture-toolbar reference. Deferred features must not appear as working controls. Settings uses native grouped controls and a sidebar; it is an adaptation rather than a verified pixel-for-pixel reproduction of the reference settings.
+The capture toolbar groups capture modes and region buttons. Editable width and height belong to the selected rectangle on its display. During a drag, the overlay draws a lightweight size label in points. The screenshot workflow asset depicts annotation and is not a capture-toolbar reference. Deferred features must not appear as working controls. Settings uses native grouped controls and a sidebar; it is an adaptation rather than a verified pixel-for-pixel reproduction of the reference settings.
 
 Karuto launches quietly into the menu bar. Launching or reopening the app never presents capture automatically; capture is opened explicitly through its configured shortcut or menu bar menu. Settings is secondary. UI changes require checking the running app, not merely successful compilation or accessibility-tree inspection.
 
@@ -59,7 +59,7 @@ The selection canvas establishes its capture crosshair when the overlay opens, w
 
 `CaptureEngine.freezeDesktop()` obtains one shareable-content catalog and concurrently captures one image per display before showing selection UI. `FrozenDesktop` owns the catalog and immutable native-resolution images; `image(for:)` crops output from those images. Area coordinates convert using actual image-to-display scale. Frozen window output is the visible desktop region, not an isolated window; cross-display windows fail explicitly. Retained frames are limited to 256 MiB.
 
-The coordinator owns the frozen session and passes its images to the UI. It chooses frozen output only for Area, Fullscreen, and Window, releases its snapshot on dismissal/cancel/failure/completion, and never substitutes a newer live frame for frozen output. UI hides the frozen backdrop for recording, scrolling, and timer modes. Settings persists defaults via AppSettings; the overlay menu changes only a CaptureSessionPreferences value snapshot; changing Freeze Display cancels and reopens selection in the same mode. No processes, audio, or desktop state are paused. Capture timing is subject to permission/catalog and ScreenCaptureKit latency, not a hardware-keypress guarantee.
+The coordinator owns the frozen session and passes its images to the UI. It uses frozen output for Area, Fullscreen, and Window snapshots with the timer off, and releases its snapshot on dismissal, cancel, failure, or completion. Recording, scrolling, and delayed captures use live content. The capture toolbar saves region, timer, and Instant Capture separately for Snapshot and Screen Recording in AppSettings. A change between frozen and live selection reopens the overlay in the active mode. No processes, audio, or desktop state are paused. Capture timing is subject to permission/catalog and ScreenCaptureKit latency, not a hardware-keypress guarantee.
 
 ## Keyboard configuration
 
@@ -72,3 +72,11 @@ Settings → Setup uses `SystemSetupSupport` for read-only Screen Recording, Acc
 Launch at login uses Apple's [`SMAppService.mainApp`](https://developer.apple.com/documentation/servicemanagement/smappservice/mainapp), with actual system status as its source of truth. No mirrored UserDefaults flag or separate helper executable is used. While an update is pending, the switch is disabled; failures refresh actual state and show an inline error. Registered services needing approval remain selected with an explicit approval message and a Login Items button. Unregistering prevents future login launches without quitting the current main app.
 
 All GUI launches initialize the status item and shortcuts without presenting capture or requesting screen access. Launch reason detection is unnecessary: manual opens, login launches, and reopens all remain quiet. `applicationShouldHandleReopen` declines default window presentation. The accessory activation policy and `LSUIElement` keep Karuto out of the Dock. Capture opens through its configured shortcut or explicit menu bar actions. Shortcut-registration errors at startup are reflected in the menu bar tooltip rather than opening an alert.
+
+Preferences supports AppKit background dragging, including blank areas below its custom header.
+
+## In-overlay OCR
+
+OCR runs during snapshot selection. The selection canvas reuses the frozen display pixels or samples the visible region once in live mode. It holds those pixels under the selection artwork so VisionKit highlights continue to match what the user sees. Each display hosts its Live Text view in the existing selection panel. Changing the region, disabling OCR, or dismissing the overlay cancels recognition and releases the sample.
+
+Double-click copies the selected word. A dragged selection supports Command-C, and Copy All copies the recognized text. Reading the preview leaves the clipboard untouched. Instant Capture stages the area while OCR is enabled, and OCR bypasses the capture timer and file-writing workflow.

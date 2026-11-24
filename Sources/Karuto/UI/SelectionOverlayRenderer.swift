@@ -15,6 +15,7 @@ final class SelectionOverlayRenderer {
     private let bounds: CGRect
     private var state: State?
     private var badgeSize = CGSize.zero
+    private var dimensionBadgeWidths: [Int: CGFloat] = [:]
     private let textAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
         .foregroundColor: NSColor.white
@@ -88,9 +89,10 @@ final class SelectionOverlayRenderer {
             if let rect = next.rect { path.addRect(rect.intersection(bounds)) }
             shade.path = path
         }
-        border.lineDashPattern = next.preview ? [6, 4] : nil
-        selection.isHidden = next.rect == nil
-        badge.isHidden = next.rect == nil || next.text.isEmpty
+        if previous?.preview != next.preview { border.lineDashPattern = next.preview ? [6, 4] : nil }
+        if previous == nil || (previous?.rect == nil) != (next.rect == nil) { selection.isHidden = next.rect == nil }
+        if previous?.text.isEmpty != next.text.isEmpty { badge.isHidden = next.text.isEmpty }
+        if previous?.resizable != next.resizable { handles.isHidden = !next.resizable }
         guard let rect = next.rect else { return true }
 
         selection.frame = rect
@@ -99,7 +101,6 @@ final class SelectionOverlayRenderer {
             handles.frame = border.frame
             border.path = CGPath(rect: CGRect(origin: .zero, size: rect.size).insetBy(dx: 0.5, dy: 0.5), transform: nil)
         }
-        handles.isHidden = !next.resizable
         if next.resizable && (previous?.rect?.size != rect.size || previous?.resizable != true) {
             let path = CGMutablePath()
             for point in Self.handlePoints(in: CGRect(origin: .zero, size: rect.size)) {
@@ -109,7 +110,17 @@ final class SelectionOverlayRenderer {
         }
         if previous?.text != next.text {
             let text = NSAttributedString(string: next.text, attributes: textAttributes)
-            badgeSize = CGSize(width: min(ceil(text.size().width) + 16, max(16, bounds.width - 16)), height: 24)
+            // The size badge uses monospaced digits and a fixed separator. Most
+            // drag events change digits without changing the label's width.
+            let dimensionLength = next.resizable && next.text.hasSuffix(" pt") ? text.length : nil
+            let width: CGFloat
+            if let dimensionLength, let cached = dimensionBadgeWidths[dimensionLength] {
+                width = cached
+            } else {
+                width = min(ceil(text.size().width) + 16, max(16, bounds.width - 16))
+                if let dimensionLength { dimensionBadgeWidths[dimensionLength] = width }
+            }
+            badgeSize = CGSize(width: width, height: 24)
             label.string = text
             label.frame = CGRect(x: 8, y: 4, width: badgeSize.width - 16, height: 16)
         }

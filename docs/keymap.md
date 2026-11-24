@@ -2,9 +2,9 @@
 
 [Project](../README.md) · [Architecture](agents/architecture.md) · [Validation](alpha-validation.md)
 
-## Defaults versus session overrides
+## Capture mode preferences
 
-Settings → Capture writes persistent `AppSettings` defaults. Opening capture copies those values into `CaptureSessionPreferences`. Overlay toggle actions change only this value snapshot and the active UI. Switching Freeze Display restarts selection with the same session snapshot; it does not reload defaults or write them. Canceling or finishing discards overrides. A subsequent capture reads current saved defaults.
+The capture toolbar saves the selected region, timer, and Instant Capture separately for Snapshot and Screen Recording. The timer defaults to off. Freeze Display applies to still snapshots with the timer off. When an option changes whether selection uses frozen or live content, Karuto reopens the selection overlay with the new source.
 
 ## Command registry
 
@@ -14,7 +14,9 @@ Settings → Capture writes persistent `AppSettings` defaults. Opening capture c
 | --- | --- | --- |
 | Global | Open toolbar, previous area, restore last capture, stop capture | Open toolbar: Control–Shift–2 |
 | Karuto active, including overlay | Preferences, keyboard shortcuts, close Preferences, quit | Command–comma, Command–Option–comma, Command–W, Command–Q |
-| Capture selection | Confirm, cancel, Instant Capture toggle, Freeze Display toggle, six capture modes | Confirm: Return; cancel: Escape; others unassigned |
+| Capture selection | Confirm, cancel, select last region, undo/redo annotation, Instant Capture, Freeze Display, OCR, capture mode, region, three-second timer toggle | Return, Escape, Command–R, Command–Z, Command–Shift–Z respectively for the first five actions |
+
+With Instant Capture off, the overlay offers **Copy screenshot without saving** (Command–C) and **Save screenshot to the Save folder** (Command–S) for selected Area, Window, and Fullscreen snapshots. Both bindings can be changed or cleared. OCR and text fields keep their text-copy behavior.
 
 Recording setup uses the configured confirm/cancel actions too. Native macOS menu navigation, text editing, file dialogs, and system shortcuts remain platform behavior; they are not additional Karuto bindings. Bare printable overlay keys do not interrupt typing dimensions. Global and application bindings require Command, Control, or Option to avoid intercepting ordinary typing.
 

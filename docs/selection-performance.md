@@ -57,3 +57,9 @@ swiftc -O -module-cache-path module-cache VerifySnapshots.swift -o verify-snapsh
 ```
 
 Run the executables sequentially without concurrent builds. Do not convert their timing ratio into an FPS claim. No UI automation, synthetic mouse events, or visible application windows were used for these measurements.
+
+## Area editor measurements, November 2026
+
+On an Apple Silicon Mac running macOS 27.2.1, the old live-overlay preparation took **45.00 ms** and the new path took **0.58 ms** (median, rounded). Both measurements ran in the same foreground-capable test process with screen capture permission. Each pair ran the old catalog lookup plus its second window-order query, then the new display and window metadata lookup. Two warm-up pairs preceded ten measured pairs. Frozen mode still waits for its display images. These measurements exclude toolbar construction and WindowServer presentation.
+
+A separate debug-build test sent 600 changing mouse-drag positions to the AppKit selection view with a toolbar and two overlay views. It excluded event construction and the first 100 positions. Before the editor change, median and p95 handler times were **43.75 / 51.29 µs**. After deferring toolbar updates to release and reusing dimension-badge widths, they were **21.88 / 24.04 µs** under the same restricted test setup. The benchmark measures synchronous event handling. It does not measure frame rate, keypress-to-visible latency, or Flameshot.
