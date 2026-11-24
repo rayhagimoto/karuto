@@ -23,7 +23,7 @@ struct StitchingError: LocalizedError, Sendable {
 }
 
 /// The lock covers append, finish and destruction. Rust never retains borrowed Swift bytes.
-/// Call append on the frame callback queue and finish on a background worker, not MainActor.
+/// Call append on the serial stitching queue and finish on a background worker, not MainActor.
 final class StitchingSession: @unchecked Sendable {
     private let lock = NSLock()
     private var handle: OpaquePointer?
@@ -73,9 +73,9 @@ final class StitchingSession: @unchecked Sendable {
             switch progress.disposition {
             case 0: text = extended ? "\(movingArea)\(height) px captured." : "Ready · Scroll down inside the selected content to extend capture."
             case 1: text = extended ? "\(height) px captured · Scroll to add more." : "No scrolling captured yet · Scroll inside the selected content."
-            case 2: text = "Cannot align content · Scroll back slowly, or restart with fixed headers and sidebars outside the selection."
+            case 2: text = "Return to the last captured content, then scroll down to continue."
             case 3: text = "Capture limit reached. Choose Finish to save \(height) px."
-            case 4: text = "Checking moving content… Scroll gently while the area is verified."
+            case 4: text = "Checking moving content… Scroll down to verify the area."
             default: text = "Scroll down slowly, keeping previous content visible."
             }
             return StitchProgress(height: height, message: text, accepted: progress.disposition == 0, disposition: Int(progress.disposition), contentRect: contentRect, viewportHeight: viewportHeight, sourceSize: CGSize(width: frame.width, height: frame.height))

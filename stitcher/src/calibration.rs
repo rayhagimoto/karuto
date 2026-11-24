@@ -28,6 +28,7 @@ pub struct CalibratedSession {
     input_size: Option<(usize, usize)>,
     pub rect: Option<ContentRect>,
     rejected: bool,
+    retried_initial_motion: bool,
 }
 impl CalibratedSession {
     pub fn new(directory: &Path) -> Result<Self> {
@@ -37,6 +38,7 @@ impl CalibratedSession {
             input_size: None,
             rect: None,
             rejected: false,
+            retried_initial_motion: false,
         })
     }
     fn pending(&self, disposition: i32) -> Progress {
@@ -83,6 +85,13 @@ impl CalibratedSession {
             return Ok(self.pending(4));
         }
         let Some(rect) = verified_rect(&self.samples) else {
+            // A hover or scrollbar repaint can precede the first actual movement.
+            // Keep the baseline and require three verified pairs on the retry.
+            if !self.retried_initial_motion {
+                self.samples.remove(1);
+                self.retried_initial_motion = true;
+                return Ok(self.pending(4));
+            }
             self.samples.clear();
             self.rejected = true;
             return Ok(self.pending(2));
@@ -192,12 +201,8 @@ fn verified_rect(samples: &[Frame]) -> Option<ContentRect> {
         let a = rect.view(&a_raw);
         let b = rect.view(&b_raw);
         let previous = Frame::from_view(&a, a.signature());
-        let Some(shift) = displacement(&previous, &b, &b.signature()) else {
-            return None;
-        };
-        if shift < 2 {
-            return None;
-        }
+        // A gesture can begin with a single pixel of uniquely matched motion.
+        displacement(&previous, &b, &b.signature())?;
     }
     Some(rect)
 }

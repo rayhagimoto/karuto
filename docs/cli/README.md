@@ -62,7 +62,7 @@ scripts/karuto scroll --area 1 40 100 800 600 --output /tmp/page.png
 scripts/karuto scroll --area 1 40 100 800 600 --manual --duration 30 --output /tmp/manual.png
 ```
 
-Automatically scrolls downward from the current position, waits between small pixel steps, and stops after accepted image growth followed by several attempts with no further growth. Keep the target visible and frontmost, with the selected rectangle's center over the intended scrollable content. Accessibility access is required for automatic input; `permissions` reports `automatic_scrolling` authorization. The CLI never prompts for it.
+Automatically scrolls downward from the current position, takes short steps to identify the moving pane, then advances up to half a viewport when stitching confirms the previous step. At the bottom it checks for further growth before saving. Keep the target visible and frontmost, with the selected rectangle's center over the intended scrollable content. Accessibility access is required for automatic input; `permissions` reports `automatic_scrolling` authorization. The CLI never prompts for it.
 
 Automatic and manual capture first verify one moving viewport across three overlapping frame pairs. Stationary outer headers, footers, and sidebars can be excluded when pixel evidence supports their boundaries. The initial frames are replayed into the stitched image, preserving the beginning. On success, `content_rect` reports the verified rectangle in **input-image pixels with a top-left origin**, relative to the selected capture rectangle; output `width` is the cropped viewport width and `height` is the complete stitched height. These pixel coordinates are distinct from the global AppKit points used by `--area`.
 

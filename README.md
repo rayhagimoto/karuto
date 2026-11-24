@@ -37,7 +37,7 @@ Switch on **OCR** to highlight recognizable text in an area, window, or display.
 
 ### Capture a scrolling page
 
-Choose **Scrolling**, select a pane in a browser or Mac app, and let Karuto scroll downward. It checks which content moves, outlines the verified region, and stitches overlapping frames into one PNG. Choose **Scroll Manually** to take over or **Adjust Area** if Karuto can’t verify a single moving pane. Automatic scrolling and pane suggestions use macOS Accessibility access.
+Choose **Scrolling**, select a pane in a browser or Mac app, and let Karuto scroll downward. It checks which content moves, outlines the verified region, and stitches overlapping frames into one PNG. Choose **Scroll Manually** to use your trackpad, mouse wheel, or Up and Down arrow keys. Scroll down to add content, then choose **Finish**. If Karuto can’t verify a single moving pane, choose **Adjust Area**. With macOS Accessibility access, Karuto directs arrow keys to the selected pane and paces fast wheel or trackpad input as frames arrive. Automatic scrolling and pane suggestions also use this access.
 
 ![Scrolling capture showing the verified portion of a trail guide, the stitched height, and the Finish and Scroll Manually controls](docs/ui-evidence/scrolling-capture.png)
 

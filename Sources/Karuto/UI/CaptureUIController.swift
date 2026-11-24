@@ -294,7 +294,13 @@ final class CaptureUIController: NSObject {
         editor.finishGesture()
         let marks = editor.marks
         let selectedRegion = region
-        let app = priorApp
+        var app = priorApp
+        if selectedRegion == .scrolling, case let .area(_, rect) = target {
+            let point = selectedScrollPoint ?? CGPoint(x: rect.midX, y: rect.midY)
+            if let pid = catalog.windows.first(where: { $0.frame.contains(point) })?.processID {
+                app = NSRunningApplication(processIdentifier: pid) ?? priorApp
+            }
+        }
         onScrollInputPoint?(selectedRegion == .scrolling ? selectedScrollPoint : nil)
         dismiss()
         app?.activate(options: [])

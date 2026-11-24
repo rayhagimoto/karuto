@@ -371,11 +371,51 @@ fn calibrated_capture_preserves_clean_full_frame_and_ignores_duplicate_evidence(
 }
 
 #[test]
+fn manual_scroll_accelerates_from_one_pixel_to_fast_overlapping_steps() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let rect = ContentRect {
+        x: 20,
+        y: 16,
+        width: 96,
+        height: 128,
+    };
+    for start in [0, 1, 7, 35, 94, 174, 254, 261] {
+        let frame = decorated_frame(144, 160, rect, start);
+        session.append(&frame, 144, 160, 576).unwrap();
+    }
+    let output = dir.0.join("manual.png");
+    session.finish(&output).unwrap();
+    let (w, h, actual) = decode_png(&output);
+    assert_eq!((w, h), (96, 389));
+    assert_eq!(actual, pixels(w, h, 0, 0));
+}
+
+#[test]
+fn transient_repaint_before_scrolling_does_not_discard_the_start() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    for (index, start) in [0, 0, 24, 60, 110].into_iter().enumerate() {
+        let mut frame = pixels(96, 128, start, 0);
+        if index == 1 {
+            // A hover highlight repaints without moving the document.
+            frame[384 * 60..384 * 72].fill(255);
+        }
+        session.append(&frame, 96, 128, 384).unwrap();
+    }
+    let output = dir.0.join("repaint.png");
+    session.finish(&output).unwrap();
+    let (w, h, actual) = decode_png(&output);
+    assert_eq!((w, h), (96, 238));
+    assert_eq!(actual, pixels(w, h, 0, 0));
+}
+
+#[test]
 fn calibrated_capture_rejects_periodic_and_unrelated_animation() {
     for periodic in [true, false] {
         let dir = TestDirectory::new();
         let mut session = CalibratedSession::new(&dir.0).unwrap();
-        for n in 0..4 {
+        for n in 0..5 {
             let raw = if periodic {
                 (0..128)
                     .flat_map(|y| pixels(96, 1, (y + n * 3) % 16, 0))
@@ -383,7 +423,10 @@ fn calibrated_capture_rejects_periodic_and_unrelated_animation() {
             } else {
                 pixels(96, 128, n * 1000, 0)
             };
-            session.append(&raw, 96, 128, 384).unwrap();
+            let result = session.append(&raw, 96, 128, 384).unwrap();
+            if n == 4 {
+                assert_eq!(result.disposition, 2);
+            }
         }
         assert!(session.rect.is_none());
         assert!(session.finish(&dir.0.join("bad.png")).is_err());
@@ -467,7 +510,7 @@ fn calibrated_capture_rejects_independent_panes_moving_different_distances() {
         width: 128,
         height: 128,
     };
-    for n in 0..4 {
+    for n in 0..5 {
         let mut raw = decorated_frame(192, 160, rect, n * 16);
         let right = pixels(64, 128, n * 24, 0);
         for y in 0..128 {

@@ -36,8 +36,8 @@ enum ScrollingCaptureCommand {
         defer { try? FileManager.default.removeItem(at: scratch) }
         let stitcher = try StitchingSession(directory: scratch, detectScrollContent: true)
         defer { stitcher.cancel() }
-        let driver = AutomaticScrollDriver()
-        driver.prepare()
+        let driver = ScrollCaptureDriver()
+        driver.prepare(target: target, catalog: catalog)
         defer { driver.stop() }
         let completion = ScrollCompletion()
         let timer = Task { @MainActor in
@@ -46,20 +46,21 @@ enum ScrollingCaptureCommand {
         }
         defer { timer.cancel() }
         engine.onFailure = { completion.resolve(.failure($0)) }
-        try await engine.startFrames(target: target) { frame in
+        try await engine.startFrames(target: target, automaticScrolling: !manual) { frame in
             do {
                 let progress = try stitcher.append(frame)
-                Task { @MainActor in driver.observe(progress) }
+                DispatchQueue.main.async { driver.observe(progress) }
             } catch { Task { @MainActor in completion.resolve(.failure(error)) } }
         }
         if manual {
+            driver.startManual()
             timer.cancel()
             Task { @MainActor in
                 do { try await Task.sleep(for: .seconds(duration)); completion.resolve(.success(())) }
                 catch { completion.resolve(.failure(error)) }
             }
         } else {
-            driver.start(target: target, catalog: catalog, onFinish: { completion.resolve(.success(())) }, onManualFallback: { reason in
+            driver.startAutomatic(drainFrames: engine.waitForPendingFrames, onFinish: { completion.resolve(.success(())) }, onManualFallback: { reason in
                 if stitcher.needsAreaAdjustment {
                     completion.resolve(.failure(KarutoCLI.Failure("Could not verify one moving pane. Adjust --area and retry.", code: 1)))
                     return

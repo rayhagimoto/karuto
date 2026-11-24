@@ -195,7 +195,7 @@ final class CaptureEngine {
         }
     }
 
-    func startFrames(target: CaptureTarget, onFrame: @escaping @Sendable (PixelFrame) -> Void) async throws {
+    func startFrames(target: CaptureTarget, automaticScrolling: Bool = false, onFrame: @escaping @Sendable (PixelFrame) -> Void) async throws {
         try ensureIdle()
         let active = CaptureSession(kind: .frames)
         session = active
@@ -208,7 +208,7 @@ final class CaptureEngine {
             guard config.width <= 4096, config.height <= 8192,
                   config.width * config.height * 4 <= 32 * 1024 * 1024 else { throw CaptureError.appshotTooLarge }
             config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.minimumFrameInterval = CMTime(value: 1, timescale: 5)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: automaticScrolling ? 60 : 30)
             config.showsCursor = false
             config.ignoreShadowsSingleWindow = true
             let delegate = makeDelegate(for: active)
@@ -231,7 +231,11 @@ final class CaptureEngine {
         }
     }
 
-    /// Drains the frame callback queue before returning, so a stitcher can finalize safely.
+    func waitForPendingFrames() async {
+        await session?.frames?.drain()
+    }
+
+    /// Stop production, then finish all admitted frames before the stitcher finalizes.
     func stopFrames() async {
         guard let active = session, active.kind == .frames else {
             await cleanupTask?.value
@@ -239,12 +243,11 @@ final class CaptureEngine {
         }
         if let pending = active.frameStopTask { await pending.value; return }
         active.stopping = true
-        active.frames?.disable()
         let pending = Task { @MainActor [weak self] in
             // Do not return while a still-starting stream could later become active.
             _ = await active.frameStartupTask?.result
             if let stream = active.stream { try? await stream.stopCapture() }
-            await active.frames?.drainAndDisable()
+            await active.frames?.drain(disableAfterCapture: true)
             if self?.session?.id == active.id { self?.session = nil }
         }
         active.frameStopTask = pending
@@ -414,7 +417,7 @@ final class CaptureEngine {
             await active.startupTask?.value
             _ = await active.frameStartupTask?.result
             if let stream = active.stream { try? await stream.stopCapture() }
-            await active.frames?.drainAndDisable()
+            await active.frames?.drain()
             self?.cleanupTask = nil
         }
         if notify, !wasAwaiting { onFailure?(error) }
@@ -482,41 +485,55 @@ private final class CaptureDelegate: NSObject, SCStreamDelegate, SCRecordingOutp
     func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) { event(.failed(error)) }
 }
 
-private final class FrameReceiver: NSObject, SCStreamOutput, @unchecked Sendable {
+final class FrameReceiver: NSObject, SCStreamOutput, @unchecked Sendable {
     let queue = DispatchQueue(label: "app.karuto.frames", qos: .userInitiated)
+    private let stitchQueue = DispatchQueue(label: "app.karuto.stitch", qos: .userInitiated)
+    // One frame stitching and one waiting. When full, the capture queue waits
+    // before copying another surface. The main thread never waits on a slot.
+    private let slots = DispatchSemaphore(value: 2)
     private let onFrame: @Sendable (PixelFrame) -> Void
     private let lock = NSLock()
     private var enabled = true
-    private var lastDelivered: CFTimeInterval = 0 // Accessed only on queue.
     init(onFrame: @escaping @Sendable (PixelFrame) -> Void) { self.onFrame = onFrame }
 
     func disable() { lock.withLock { enabled = false } }
 
-    func drainAndDisable() async {
-        disable()
-        await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+    func drain(disableAfterCapture: Bool = false) async {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                if disableAfterCapture { self.disable() }
+                self.stitchQueue.async { continuation.resume() }
+            }
+        }
+    }
+
+    // Called serially on queue. The owned copy outlives the ScreenCaptureKit callback.
+    func enqueue(_ copy: () -> PixelFrame?) {
+        slots.wait()
+        guard lock.withLock({ enabled }), let frame = copy() else { slots.signal(); return }
+        stitchQueue.async {
+            self.onFrame(frame)
+            self.slots.signal()
+        }
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, lock.withLock({ enabled }), sampleBuffer.isValid,
+        guard type == .screen, sampleBuffer.isValid,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let status = attachments.first?[.status] as? Int, status == SCFrameStatus.complete.rawValue,
               let buffer = sampleBuffer.imageBuffer else { return }
-        let now = CACurrentMediaTime()
-        guard now - lastDelivered >= 0.2 else { return }
-        lastDelivered = now
-        autoreleasepool {
-            guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA else { return }
-            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        enqueue {
+            guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA,
+                  CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
             defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
             let width = CVPixelBufferGetWidth(buffer)
             let height = CVPixelBufferGetHeight(buffer)
             let stride = CVPixelBufferGetBytesPerRow(buffer)
             guard width > 0, width <= 4096, height > 0, height <= 8192,
                   stride >= width * 4, stride <= 131072,
-                  let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+                  let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
             let data = Data(bytes: base, count: stride * height)
-            onFrame(PixelFrame(data: data, width: width, height: height, bytesPerRow: stride))
+            return PixelFrame(data: data, width: width, height: height, bytesPerRow: stride)
         }
     }
 }

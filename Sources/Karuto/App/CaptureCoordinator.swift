@@ -25,7 +25,7 @@ final class CaptureCoordinator {
     private var frozenDesktop: FrozenDesktop?
     private var elapsedTask: Task<Void, Never>?
     private var recentArtifact: CaptureArtifact?
-    private let automaticScroll = AutomaticScrollDriver()
+    private let scrollDriver = ScrollCaptureDriver()
     private var scrollingAutomatically = false
     private var scrollingNeedsAdjustment = false
     private var scrollInputPoint: CGPoint?
@@ -69,7 +69,7 @@ final class CaptureCoordinator {
         controls.onReselect = { [weak self] in
             self?.cancel { [weak self] in self?.openToolbar(initialRegion: .scrolling) }
         }
-        controls.onManual = { [weak self] in self?.useManualScrolling("Scroll inside the selected content, then choose Finish.") }
+        controls.onManual = { [weak self] in self?.useManualScrolling("Scroll down with the trackpad, mouse, or ↓ key.") }
         previews.onSave = { [weak self] in self?.saveAs($0) }
         previews.onCopy = { [weak self] in self?.copy($0) }
         previews.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([$0.url]) }
@@ -208,21 +208,22 @@ final class CaptureCoordinator {
                     startClock(id: id)
                 } else if region == .scrolling {
                     let session = try startFileSession()
-                    automaticScroll.prepare()
+                    scrollDriver.prepare(target: target, catalog: catalog, inputPoint: scrollInputPoint)
                     let sessionStitcher = try StitchingSession(directory: session, detectScrollContent: true)
                     stitcher = sessionStitcher; scrollingStarted = Date()
                     controls.show(title: "Preparing scrolling capture", message: "Starting local capture…", stopTitle: "Cancel")
-                    try await engine.startFrames(target: target) { [weak self] frame in
+                    scrollingAutomatically = settings.automaticScrolling
+                    try await engine.startFrames(target: target, automaticScrolling: scrollingAutomatically) { [weak self] frame in
                         do {
                             let progress = try sessionStitcher.append(frame)
-                            Task { @MainActor [weak self] in
+                            DispatchQueue.main.async { [weak self] in
                                 guard let self, self.operationID == id, self.phase == .scrolling || self.phase == .preparing else { return }
                                 if progress.disposition == 2 && progress.contentRect == nil {
                                     self.requireScrollAdjustment()
                                     return
                                 }
                                 guard !self.scrollingNeedsAdjustment else { return }
-                                self.automaticScroll.observe(progress)
+                                self.scrollDriver.observe(progress)
                                 if let region = progress.contentRect {
                                     self.scrollContentGuide.show(region: region, sourceSize: progress.sourceSize, target: target, catalog: self.catalog)
                                 }
@@ -236,10 +237,11 @@ final class CaptureCoordinator {
                     guard operationID == id else { await engine.stopFrames(); return }
                     phase = .scrolling
                     guard !scrollingNeedsAdjustment else { await engine.stopFrames(); return }
-                    scrollingAutomatically = settings.automaticScrolling
-                    controls.show(title: scrollingAutomatically ? "Automatic scrolling" : "Manual scrolling", message: scrollingAutomatically ? "Keep the target visible. Capturing downward…" : "Scroll inside the selected content, then choose Finish.", stopTitle: "Finish", allowsManual: scrollingAutomatically)
-                    if scrollingAutomatically, let catalog {
-                        automaticScroll.start(target: target, catalog: catalog, inputPoint: scrollInputPoint, onFinish: { [weak self] in self?.stop() }, onManualFallback: { [weak self] reason in self?.useManualScrolling(reason) })
+                    controls.show(title: scrollingAutomatically ? "Automatic scrolling" : "Manual scrolling · ↑ ↓", message: scrollingAutomatically ? "Keep the target visible. Capturing downward…" : "Scroll down with the trackpad, mouse, or ↓ key.", stopTitle: "Finish", allowsManual: scrollingAutomatically)
+                    if scrollingAutomatically {
+                        scrollDriver.startAutomatic(drainFrames: engine.waitForPendingFrames, onFinish: { [weak self] in self?.stop() }, onManualFallback: { [weak self] reason in self?.useManualScrolling(reason) })
+                    } else {
+                        scrollDriver.startManual()
                     }
                     startClock(id: id)
                 } else {
@@ -270,7 +272,7 @@ final class CaptureCoordinator {
     private func requireScrollAdjustment() {
         guard !scrollingNeedsAdjustment else { return }
         scrollingNeedsAdjustment = true
-        automaticScroll.stop()
+        scrollDriver.stop()
         scrollContentGuide.dismiss()
         elapsedTask?.cancel()
         controls.show(title: "Adjust scrolling area", message: "Could not verify one moving pane. Adjust the area and try again.", stopTitle: "", allowsReselect: true)
@@ -278,10 +280,10 @@ final class CaptureCoordinator {
     }
 
     private func useManualScrolling(_ message: String) {
-        guard phase == .scrolling else { return }
-        automaticScroll.stop()
+        guard phase == .scrolling, !scrollingNeedsAdjustment else { return }
+        scrollDriver.startManual()
         scrollingAutomatically = false
-        controls.show(title: "Manual scrolling", message: message, stopTitle: "Finish")
+        controls.show(title: "Manual scrolling · ↑ ↓", message: message, stopTitle: "Finish")
     }
 
     private func startClock(id: UUID) {
@@ -303,7 +305,7 @@ final class CaptureCoordinator {
             if phase == .preparing || phase == .selecting { cancel(after: completion); return }
             completion?(); return
         }
-        automaticScroll.stop()
+        scrollDriver.stop()
         scrollContentGuide.dismiss()
         let wasRecording = phase == .recording
         let id = operationID
@@ -335,7 +337,7 @@ final class CaptureCoordinator {
         if phase == .recording { stop(after: completion); return }
         if phase == .idle { completion?(); return }
         guard phase != .finalizing else { return }
-        automaticScroll.stop()
+        scrollDriver.stop()
         scrollContentGuide.dismiss()
         let pending = task
         pending?.cancel(); elapsedTask?.cancel()
@@ -352,10 +354,10 @@ final class CaptureCoordinator {
     private func appshotFrameFailed(_ error: Error, id: UUID) {
         guard operationID == id, phase == .scrolling else { return }
         // Freeze at the last accepted strip. The user can still finish and save valid content.
-        automaticScroll.stop()
+        scrollDriver.stop()
         scrollContentGuide.dismiss()
         elapsedTask?.cancel()
-        controls.update(message: "\(error.localizedDescription) Finish to save accepted content.")
+        controls.show(title: "Scrolling paused", message: "\(error.localizedDescription) Finish to save accepted content.", stopTitle: "Finish")
         Task { await engine.stopFrames() }
     }
 
@@ -370,7 +372,7 @@ final class CaptureCoordinator {
 
     private func fail(_ error: Error, id: UUID) {
         guard operationID == id else { return }
-        automaticScroll.stop()
+        scrollDriver.stop()
         scrollContentGuide.dismiss()
         task?.cancel(); elapsedTask?.cancel()
         let oldDirectory = directory; let oldStitcher = stitcher
@@ -425,7 +427,7 @@ final class CaptureCoordinator {
     }
 
     private func reset() {
-        automaticScroll.stop(); scrollingAutomatically = false; scrollingNeedsAdjustment = false
+        scrollDriver.stop(); scrollingAutomatically = false; scrollingNeedsAdjustment = false
         scrollContentGuide.dismiss(); scrollInputPoint = nil
         controls.dismiss(); elapsedTask?.cancel(); elapsedTask = nil
         stitcher = nil; directory = nil; operationID = nil; scrollingStarted = nil; frozenDesktop = nil; phase = .idle
