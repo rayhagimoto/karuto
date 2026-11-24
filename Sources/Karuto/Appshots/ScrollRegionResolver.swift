@@ -12,6 +12,7 @@ struct ScrollRegionRequest: Sendable {
 /// App-scoped accessibility queries are serialized away from pointer rendering.
 /// Failure is an ordinary result: a raw window remains an explicitly unverified fallback.
 actor ScrollRegionResolver {
+    enum ScrollPosition { case atBottom, aboveBottom, unknown }
     private struct CacheEntry {
         let windowID: UInt32
         let processID: Int32
@@ -37,11 +38,51 @@ actor ScrollRegionResolver {
     }
 
     private func discover(_ request: ScrollRegionRequest, pid: Int32) -> CGRect? {
+        let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+        let quartzPoint = CGPoint(x: request.point.x, y: primaryHeight - request.point.y)
+        return firstScrollArea(pid: pid, at: quartzPoint) { _, quartzFrame in
+            let frame = CaptureGeometry.appKitRect(fromQuartz: quartzFrame, primaryHeight: primaryHeight)
+            return Self.clippedCandidate(frame, point: request.point, window: request.window.frame, display: request.display.frame)
+        }
+    }
+
+    /// Only trust the nearest scroll area's range when its bounds agree with
+    /// the moving pixels. An enclosing page can be at its end while a child scrolls.
+    func scrollPosition(pid: Int32, point: CGPoint, verifiedBounds: CGRect) -> ScrollPosition {
+        firstScrollArea(pid: pid, at: point) { area, frame -> ScrollPosition? in
+            let tolerance: CGFloat = 18 // Allow for a native scrollbar or border.
+            guard abs(frame.minX - verifiedBounds.minX) <= tolerance, abs(frame.maxX - verifiedBounds.maxX) <= tolerance,
+                  abs(frame.minY - verifiedBounds.minY) <= tolerance, abs(frame.maxY - verifiedBounds.maxY) <= tolerance,
+                  let raw = attribute(area, kAXVerticalScrollBarAttribute as CFString),
+                  CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .unknown }
+            let bar = raw as! AXUIElement
+            AXUIElementSetMessagingTimeout(bar, 0.025)
+            guard let value = attribute(bar, kAXValueAttribute as CFString) as? NSNumber else { return .unknown }
+            var maximum: CFTypeRef?
+            let upper: Double
+            switch AXUIElementCopyAttributeValue(bar, kAXMaxValueAttribute as CFString, &maximum) {
+            case .success:
+                guard let max = maximum as? NSNumber,
+                      let min = attribute(bar, kAXMinValueAttribute as CFString) as? NSNumber,
+                      max.doubleValue > min.doubleValue, value.doubleValue >= min.doubleValue else { return .unknown }
+                upper = max.doubleValue
+            case .attributeUnsupported:
+                // NSScroller exposes a normalized value and omits both range attributes.
+                guard attribute(bar, kAXRoleAttribute as CFString) as? String == kAXScrollBarRole as String,
+                      value.doubleValue >= 0 else { return .unknown }
+                upper = 1
+            default: return .unknown
+            }
+            guard value.doubleValue <= upper else { return .unknown }
+            return value.doubleValue == upper ? .atBottom : .aboveBottom
+        } ?? .unknown
+    }
+
+    private func firstScrollArea<T>(pid: Int32, at point: CGPoint, match: (AXUIElement, CGRect) -> T?) -> T? {
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.025)
-        let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
         var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(application, Float(request.point.x), Float(primaryHeight - request.point.y), &element) == .success else { return nil }
+        guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &element) == .success else { return nil }
         let deadline = Date().addingTimeInterval(0.25)
         for _ in 0..<16 {
             guard let current = element, Date() < deadline else { return nil }
@@ -49,10 +90,7 @@ actor ScrollRegionResolver {
             let role = attribute(current, kAXRoleAttribute as CFString) as? String
             let hasVerticalScrollBar = attribute(current, kAXVerticalScrollBarAttribute as CFString) != nil
             if role == (kAXScrollAreaRole as String) || hasVerticalScrollBar,
-               let quartzFrame = frame(current) {
-                let appKitFrame = CGRect(x: quartzFrame.minX, y: primaryHeight - quartzFrame.maxY, width: quartzFrame.width, height: quartzFrame.height)
-                if let candidate = Self.clippedCandidate(appKitFrame, point: request.point, window: request.window.frame, display: request.display.frame) { return candidate }
-            }
+               let bounds = frame(current), let result = match(current, bounds) { return result }
             guard let parent = attribute(current, kAXParentAttribute as CFString), CFGetTypeID(parent) == AXUIElementGetTypeID() else { return nil }
             element = (parent as! AXUIElement)
         }

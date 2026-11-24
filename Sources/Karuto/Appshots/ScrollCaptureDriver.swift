@@ -2,14 +2,13 @@ import AppKit
 import ApplicationServices
 
 /// Drives an existing frame/stitch session. It never owns capture output or presents UI.
-/// End detection is conservative: several settled scroll attempts must add no pixels.
 @MainActor
 final class ScrollCaptureDriver {
     private var task: Task<Void, Never>?
     private var monitor: Any?
     private let manualInput = ManualScrollInput()
+    private let regionResolver = ScrollRegionResolver()
     private var pacing = ManualScrollPacing()
-    private let source = CGEventSource(stateID: .privateState)
     private var destination: Destination?
     private var verifiedBounds: CGRect?
     private var finish: (() -> Void)?
@@ -118,6 +117,8 @@ final class ScrollCaptureDriver {
             let began = Date()
             var noGrowthAttempts = 0
             var mismatchAttempts = 0
+            var timing = AutomaticScrollTiming()
+            let clock = ContinuousClock()
             while !Task.isCancelled {
                 guard Date().timeIntervalSince(began) < 110 else {
                     self.useManual("Automatic scrolling reached its time limit. Continue manually or choose Finish.")
@@ -136,17 +137,38 @@ final class ScrollCaptureDriver {
                 }
                 // A smooth scroll can render several partial frames. Only a verified
                 // full step releases the next large input. Use a small probe on stalls.
-                let clock = ContinuousClock()
                 let sent = clock.now
+                var lastGrowth = sent
+                var lastHeight = before.height
+                var scrollPosition = ScrollRegionResolver.ScrollPosition.unknown
+                let quietInterval = before.hasExtended ? timing.quietInterval : .milliseconds(750)
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
                     let elapsed = sent.duration(to: clock.now)
-                    if self.progress.covered(step: step, since: before, sourceHeight: sourceHeight) { break }
+                    if self.progress.covered(step: step, since: before, sourceHeight: sourceHeight) {
+                        if before.hasExtended { timing.record(stepDuration: elapsed) }
+                        break
+                    }
+                    if self.progress.height > lastHeight {
+                        lastHeight = self.progress.height
+                        lastGrowth = clock.now
+                    }
                     if before.isCalibrating, noGrowthAttempts < 3, self.progress.frameCount > before.frameCount,
                        elapsed >= .milliseconds(160) { break }
-                    if elapsed >= .milliseconds(750) {
+                    if lastGrowth.duration(to: clock.now) >= quietInterval {
                         // A busy stitcher can still have growth to report for this input.
                         await drainFrames()
+                        if !Task.isCancelled, mismatchAttempts == 0, before.hasExtended, lastHeight == self.progress.height,
+                           before.rejectedFrames == self.progress.rejectedFrames, let bounds = self.verifiedBounds {
+                            let point = CGPoint(x: bounds.midX, y: bounds.midY)
+                            scrollPosition = await self.regionResolver.scrollPosition(pid: destination.owner.pid, point: point, verifiedBounds: bounds)
+                            await drainFrames()
+                            if !Task.isCancelled, scrollPosition == .atBottom, lastHeight == self.progress.height,
+                               before.rejectedFrames == self.progress.rejectedFrames {
+                                self.complete()
+                                return
+                            }
+                        }
                         break
                     }
                 }
@@ -162,7 +184,12 @@ final class ScrollCaptureDriver {
                     }
                 } else {
                     noGrowthAttempts += 1
-                    if noGrowthAttempts >= 4 {
+                    if scrollPosition == .aboveBottom {
+                        if noGrowthAttempts >= 4 {
+                            self.useManual("The pane stopped responding before the bottom. Continue scrolling manually or choose Finish.")
+                            return
+                        }
+                    } else if noGrowthAttempts >= (self.progress.hasExtended ? 2 : 4) {
                         if self.progress.hasExtended {
                             self.complete()
                         } else {
@@ -195,14 +222,41 @@ final class ScrollCaptureDriver {
     }
 
     private func postScroll(_ delta: Int32, at point: CGPoint) -> Bool {
-        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
-                                  wheel1: delta, wheel2: 0, wheel3: 0) else { return false }
-        event.location = point
+        guard let destination, let event = Self.windowScrollEvent(delta, at: point, windowID: destination.owner.id,
+                                                                   windowFrame: destination.owner.frame) else { return false }
         event.setIntegerValueField(.eventSourceUserData, value: Self.eventMarker)
-        // HID routing supplies the window metadata Chromium expects.
-        event.post(tap: .cghidEventTap)
+        event.postToPid(destination.owner.pid)
         return true
     }
+
+    static func windowScrollEvent(_ delta: Int32, at point: CGPoint, windowID: UInt32, windowFrame: CGRect) -> CGEvent? {
+        // A PID-posted wheel has no AppKit window number. Seed the event with
+        // AppKit's window-local routing data, then send it only as a wheel event.
+        guard let setWindowLocation,
+              let event = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: Int(windowID),
+                                             context: nil, eventNumber: 0, clickCount: 0, pressure: 0)?.cgEvent,
+              let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                  wheel1: delta, wheel2: 0, wheel3: 0) else { return nil }
+        event.type = .scrollWheel
+        event.location = point
+        setWindowLocation(event, CGPoint(x: point.x - windowFrame.minX, y: point.y - windowFrame.minY))
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: wheel.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: wheel.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(delta))
+        return event
+    }
+
+    private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+    // Direct delivery bypasses WindowServer hit testing. Without a window-local
+    // Quartz point, AppKit receives (-1, -1) even when the global point is correct.
+    // This CoreGraphics setter is undocumented. Fail into manual input if absent.
+    private static let setWindowLocation: SetWindowLocation? = {
+        guard let bundle = CFBundleGetBundleWithIdentifier("com.apple.CoreGraphics" as CFString),
+              let symbol = CFBundleGetFunctionPointerForName(bundle, "CGEventSetWindowLocation" as CFString) else { return nil }
+        return unsafeBitCast(symbol, to: SetWindowLocation.self)
+    }()
 
     private struct Destination {
         let owner: Owner
@@ -232,6 +286,15 @@ final class ScrollCaptureDriver {
             if ownerPID == pid { return nil }
         }
         return nil
+    }
+}
+
+struct AutomaticScrollTiming {
+    private(set) var quietInterval: Duration = .milliseconds(750)
+
+    mutating func record(stepDuration: Duration) {
+        // Slow redraws lengthen the wait immediately. Several fast steps shorten it.
+        quietInterval = min(.milliseconds(750), max(.milliseconds(220), quietInterval * 0.75, stepDuration * 3))
     }
 }
 

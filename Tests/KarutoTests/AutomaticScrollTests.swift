@@ -1,10 +1,37 @@
 import Testing
+import AppKit
 import CoreGraphics
 import Carbon.HIToolbox
 import Synchronization
 @testable import Karuto
 
 struct AutomaticScrollTests {
+    @MainActor @Test func directedScrollCarriesWindowAndPaneCoordinates() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: CGRect(x: 80, y: 120, width: 400, height: 300),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let frame = CGRect(x: window.frame.minX, y: CGDisplayBounds(CGMainDisplayID()).height - window.frame.maxY,
+                           width: window.frame.width, height: window.frame.height)
+        let point = CGPoint(x: frame.minX + 93, y: frame.minY + 56)
+        let cg = try #require(ScrollCaptureDriver.windowScrollEvent(-48, at: point, windowID: UInt32(window.windowNumber), windowFrame: frame))
+        let event = try #require(NSEvent(cgEvent: cg))
+        #expect(event.type == .scrollWheel)
+        #expect(event.windowNumber == window.windowNumber)
+        #expect(event.locationInWindow == CGPoint(x: 93, y: frame.height - 56))
+        #expect(cg.location == point)
+        #expect(event.scrollingDeltaY == -48)
+    }
+
+    @Test func endConfirmationAdaptsToRedrawSpeed() {
+        var timing = AutomaticScrollTiming()
+        for _ in 0..<8 { timing.record(stepDuration: .milliseconds(32)) }
+        #expect(timing.quietInterval == .milliseconds(220))
+        timing.record(stepDuration: .milliseconds(190))
+        #expect(timing.quietInterval == .milliseconds(570))
+    }
+
     @Test func automaticStepsWaitForTheRequestedDistanceInRetinaPixels() {
         var progress = AutomaticScrollProgress()
         func frame(_ height: Int, _ disposition: Int) -> StitchProgress {
