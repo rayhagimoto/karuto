@@ -44,6 +44,69 @@ struct StitchingSessionTests {
         #expect(try session.finish(to: output).height == 120)
     }
 
+    @Test func unresolvedOverlapRequiresExplicitPartialSave() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = try StitchingSession(directory: directory, detectScrollContent: true,
+                                           contentHint: CGRect(x: 0, y: 0, width: 1, height: 1))
+        for offset in [0, 12, 24, 36] { _ = try session.append(frame(start: offset)) }
+        #expect(session.verifiedContentRect == CGRect(x: 0, y: 0, width: 64, height: 96))
+        #expect(session.partialReason == nil)
+        #expect(try session.append(frame(start: 1000)).disposition == 2)
+        let output = directory.appendingPathComponent("partial.png")
+        #expect(throws: StitchingError.self) { try session.finish(to: output) }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+        #expect(try session.append(frame(start: 36)).disposition == 5)
+        #expect(session.partialReason == nil)
+        #expect(try session.append(frame(start: 48)).accepted)
+        #expect(session.partialReason == nil)
+        #expect(try session.append(frame(start: 1000)).disposition == 2)
+        #expect(try session.finish(to: output, allowPartial: true).height == 144)
+    }
+
+    @Test func anOccludingBottomBandRequiresPartialReview() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = try StitchingSession(directory: directory, detectScrollContent: true)
+        let fixed = frame(start: 1_000)
+        for offset in [0, 12, 24, 36] {
+            let source = frame(start: offset)
+            var bytes = source.data
+            let footer = (source.bytesPerRow * 76)..<bytes.count
+            bytes.replaceSubrange(footer, with: fixed.data[footer])
+            _ = try session.append(PixelFrame(data: bytes, width: source.width, height: source.height,
+                                             bytesPerRow: source.bytesPerRow))
+        }
+        #expect(session.verifiedContentRect?.height == 76)
+        #expect(session.partialReason?.contains("fixed bottom band") == true)
+    }
+
+    @Test func automaticBaselineWaitsForLayoutChangesAndKeepsTheSettledViewport() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = try StitchingSession(directory: directory, detectScrollContent: true, waitForBaseline: true)
+        let start = ContinuousClock.now
+        _ = try session.append(frame(start: 1_000), at: start)
+        let settled = frame(start: 0)
+        _ = try session.append(settled, at: start.advanced(by: .milliseconds(250)))
+        #expect(try !session.beginMotion(force: false, at: start.advanced(by: .milliseconds(650))))
+        _ = try session.append(settled, at: start.advanced(by: .milliseconds(690)))
+        #expect(try session.beginMotion(force: false, at: start.advanced(by: .milliseconds(700))))
+        for offset in [12, 24] { _ = try session.append(frame(start: offset)) }
+        #expect(try session.append(frame(start: 36)).height == 132)
+        let output = directory.appendingPathComponent("settled.png")
+        #expect(try session.finish(to: output).height == 132)
+    }
+
+    @Test func manualFallbackCanStartBeforeTheFirstFrame() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = try StitchingSession(directory: directory, waitForBaseline: true)
+        #expect(try !session.beginMotion(force: true))
+        #expect(try session.append(frame(start: 0)).accepted)
+        #expect(try session.append(frame(start: 12)).height == 108)
+    }
+
     @Test func cancellationIsIdempotentAndRemovesOnlyScratch() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -47,6 +47,16 @@ final class ScrollCaptureDriver {
         destination = Destination(owner: owner, point: quartzPoint, bounds: bounds)
     }
 
+    func contentHint() async -> CGRect? {
+        guard let destination else { return nil }
+        let bounds = destination.bounds
+        guard let pane = await regionResolver.paneBounds(pid: destination.owner.pid, point: destination.point,
+                                                         selection: bounds, window: destination.owner.frame),
+              !Task.isCancelled else { return nil }
+        return CGRect(x: (pane.minX - bounds.minX) / bounds.width, y: (pane.minY - bounds.minY) / bounds.height,
+                      width: pane.width / bounds.width, height: pane.height / bounds.height)
+    }
+
     func observe(_ value: StitchProgress) {
         progress.observe(value)
         pacing.receivedFrame()
@@ -84,6 +94,7 @@ final class ScrollCaptureDriver {
     }
 
     func startAutomatic(drainFrames: @escaping @MainActor () async -> Void,
+                        beginMotion: @escaping @MainActor (Bool) throws -> Bool,
                         onFinish: @escaping () -> Void, onManualFallback: @escaping (String) -> Void) {
         stop()
         finish = onFinish
@@ -103,20 +114,29 @@ final class ScrollCaptureDriver {
             }
         }
         task = Task { [weak self] in
-            // Let the stream record the initial viewport before issuing any scroll.
-            for _ in 0..<20 {
-                guard let self, !Task.isCancelled else { return }
-                if self.progress.hasFrame { break }
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard let self else { return }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while !Task.isCancelled {
+                await drainFrames()
+                guard !Task.isCancelled else { return }
+                let force = ContinuousClock.now >= deadline
+                do {
+                    if try beginMotion(force) { break }
+                } catch {
+                    self.useManual(error.localizedDescription)
+                    return
+                }
+                if force {
+                    self.useManual("No capture frames arrived. Continue manually or restart capture.")
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
             }
-            guard let self, !Task.isCancelled else { return }
-            guard self.progress.hasFrame else {
-                self.useManual("No capture frames arrived. Continue manually or restart capture.")
-                return
-            }
+            guard !Task.isCancelled else { return }
             let began = Date()
             var noGrowthAttempts = 0
-            var mismatchAttempts = 0
+            var lastProgress: ContinuousClock.Instant?
+            var lastKnownPosition = ScrollRegionResolver.ScrollPosition.unknown
             var timing = AutomaticScrollTiming()
             let clock = ContinuousClock()
             while !Task.isCancelled {
@@ -124,14 +144,17 @@ final class ScrollCaptureDriver {
                     self.useManual("Automatic scrolling reached its time limit. Continue manually or choose Finish.")
                     return
                 }
-                guard destination.isFocused() else {
+                let point = self.verifiedBounds.flatMap { bounds in
+                    bounds.contains(destination.point) ? nil : CGPoint(x: bounds.midX, y: bounds.midY)
+                } ?? destination.point
+                guard destination.isFocused(at: point) else {
                     self.useManual("The target window moved, was covered, or lost focus. Continue manually when ready.")
                     return
                 }
                 let before = self.progress
                 let sourceHeight = destination.bounds.height
-                let step = before.scrollStep(sourceHeight: sourceHeight, retrying: noGrowthAttempts > 0 || mismatchAttempts > 0)
-                guard self.postScroll(-step, at: destination.point) else {
+                let step = before.scrollStep(sourceHeight: sourceHeight, retrying: noGrowthAttempts > 0)
+                guard self.postScroll(-step, at: point) else {
                     self.useManual("Could not send a scroll event. Continue scrolling manually.")
                     return
                 }
@@ -155,19 +178,16 @@ final class ScrollCaptureDriver {
                     }
                     if before.isCalibrating, noGrowthAttempts < 3, self.progress.frameCount > before.frameCount,
                        elapsed >= .milliseconds(160) { break }
-                    if lastGrowth.duration(to: clock.now) >= quietInterval {
+                    let rejected = self.progress.rejectedFrames > before.rejectedFrames
+                    let settling = rejected ? max(quietInterval, .milliseconds(550)) : quietInterval
+                    if lastGrowth.duration(to: clock.now) >= settling {
                         // A busy stitcher can still have growth to report for this input.
                         await drainFrames()
-                        if !Task.isCancelled, mismatchAttempts == 0, before.hasExtended, lastHeight == self.progress.height,
+                        if !Task.isCancelled, before.hasExtended, lastHeight == self.progress.height,
                            before.rejectedFrames == self.progress.rejectedFrames, let bounds = self.verifiedBounds {
                             let point = CGPoint(x: bounds.midX, y: bounds.midY)
                             scrollPosition = await self.regionResolver.scrollPosition(pid: destination.owner.pid, point: point, verifiedBounds: bounds)
                             await drainFrames()
-                            if !Task.isCancelled, scrollPosition == .atBottom, lastHeight == self.progress.height,
-                               before.rejectedFrames == self.progress.rejectedFrames {
-                                self.complete()
-                                return
-                            }
                         }
                         break
                     }
@@ -175,26 +195,30 @@ final class ScrollCaptureDriver {
                 guard !Task.isCancelled else { return }
                 if self.progress.height > before.height {
                     noGrowthAttempts = 0
-                    mismatchAttempts = 0
-                } else if self.progress.rejectedFrames > before.rejectedFrames || mismatchAttempts > 0 {
-                    mismatchAttempts += 1
-                    if mismatchAttempts >= 2 {
-                        self.useManual("Content could not be aligned. Scroll back slowly, or restart with fixed headers and sidebars outside the selection.")
-                        return
-                    }
+                    lastProgress = nil
+                    lastKnownPosition = .unknown
+                } else if self.progress.rejectedFrames > before.rejectedFrames {
+                    self.useManual("The overlap could not be verified. Return to the last captured area and scroll slowly, or choose Finish to review the partial capture.")
+                    return
                 } else {
                     noGrowthAttempts += 1
-                    if scrollPosition == .aboveBottom {
+                    if scrollPosition != .unknown { lastKnownPosition = scrollPosition }
+                    if lastKnownPosition == .aboveBottom {
+                        lastProgress = nil
                         if noGrowthAttempts >= 4 {
                             self.useManual("The pane stopped responding before the bottom. Continue scrolling manually or choose Finish.")
                             return
                         }
-                    } else if noGrowthAttempts >= (self.progress.hasExtended ? 2 : 4) {
-                        if self.progress.hasExtended {
+                    } else if self.progress.hasExtended {
+                        let since = lastProgress ?? sent
+                        lastProgress = since
+                        if timing.hasConfirmedEnd(quietFor: since.duration(to: clock.now), probes: noGrowthAttempts,
+                                                  reportsBottom: lastKnownPosition == .atBottom) {
                             self.complete()
-                        } else {
-                            self.useManual("Automatic scrolling added no content. Move the pointer over the scrollable content and scroll manually.")
+                            return
                         }
+                    } else if noGrowthAttempts >= 4 {
+                        self.useManual("No vertical scrolling was captured. Select one vertical pane, then scroll slowly inside it.")
                         return
                     }
                 }
@@ -292,6 +316,11 @@ final class ScrollCaptureDriver {
 struct AutomaticScrollTiming {
     private(set) var quietInterval: Duration = .milliseconds(750)
 
+    func hasConfirmedEnd(quietFor duration: Duration, probes: Int, reportsBottom: Bool) -> Bool {
+        // Accessibility can report the current end before an infinite feed loads.
+        duration >= .milliseconds(850) && (reportsBottom || probes >= 2)
+    }
+
     mutating func record(stepDuration: Duration) {
         // Slow redraws lengthen the wait immediately. Several fast steps shorten it.
         quietInterval = min(.milliseconds(750), max(.milliseconds(220), quietInterval * 0.75, stepDuration * 3))
@@ -313,7 +342,7 @@ struct AutomaticScrollProgress {
         let viewport = sourceHeight * viewportFraction
         let scale = sourcePixels > 0 ? sourcePixels / sourceHeight : 1
         // The matcher needs at least 24 overlapping pixels even on tiny panes.
-        let step = isCalibrating || retrying ? min(48, viewport / 4) : viewport / 2
+        let step = isCalibrating || retrying ? min(48, viewport / 4) : viewport / 3
         return Int32(max(1, min(step, viewport - 24 / scale)))
     }
 

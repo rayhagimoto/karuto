@@ -104,4 +104,5 @@ struct CaptureArtifact: Identifiable, Sendable {
     let height: Int
     var duration: TimeInterval = 0
     var isSaved = false
+    var isPartial = false
 }

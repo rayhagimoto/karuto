@@ -11,7 +11,7 @@ typedef struct SXStitcher SXStitcher;
 typedef struct SXStitchProgress {
     uint32_t width;
     uint32_t height;
-    /* 0 accepted, 1 unchanged, 2 reconnect required, 3 limit reached, 4 checking content. */
+    /* 0 accepted, 1 unchanged, 2 reconnect required, 3 limit reached, 4 checking content, 5 reconnected. */
     int32_t disposition;
 } SXStitchProgress;
 
@@ -26,6 +26,8 @@ SXStitcher *sx_stitcher_create_calibrated(const char *directory, char *error, si
 typedef struct SXContentRect { uint32_t x, y, width, height; } SXContentRect;
 /* Top-left input pixel coordinates. Returns 1 verified, 0 pending, -1 invalid. */
 int32_t sx_stitcher_content_rect(SXStitcher *, SXContentRect *);
+/* Optional input-pixel pane bounds. Set before appending the first frame. */
+int32_t sx_stitcher_set_content_hint(SXStitcher *, SXContentRect);
 
 int32_t sx_stitcher_append(SXStitcher *, const uint8_t *bytes, size_t length,
                           uint32_t width, uint32_t height, size_t stride,

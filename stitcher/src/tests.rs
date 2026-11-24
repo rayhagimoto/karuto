@@ -323,6 +323,82 @@ fn decorated_frame(width: usize, height: usize, rect: ContentRect, start: usize)
 }
 
 #[test]
+fn calibration_uses_structural_bounds_only_if_the_pixels_agree() {
+    let dir = TestDirectory::new();
+    let rect = ContentRect {
+        x: 30,
+        y: 24,
+        width: 120,
+        height: 112,
+    };
+    for hint in [
+        rect,
+        ContentRect {
+            x: 0,
+            y: 0,
+            width: 192,
+            height: 160,
+        },
+    ] {
+        let mut session = CalibratedSession::new(&dir.0).unwrap();
+        assert!(session.set_hint(hint));
+        for start in [0, 14, 28, 42, 56] {
+            let raw = decorated_frame(192, 160, rect, start);
+            session.append(&raw, 192, 160, 768).unwrap();
+        }
+        assert_eq!(session.rect, Some(rect));
+        assert!(!session.set_hint(rect));
+    }
+}
+
+#[test]
+fn matching_does_not_require_ink_in_every_third_of_the_overlap() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    let (width, height, step) = (192, 216, 25);
+    let mut document = pixels(width, height + step, 0, 0);
+    document[width * 4 * 85..width * 4 * 160].fill(0xee);
+    session.append(&document, width, height, width * 4).unwrap();
+    let progress = session
+        .append(&document[width * 4 * step..], width, height, width * 4)
+        .unwrap();
+    assert_eq!(
+        (progress.disposition, progress.height),
+        (0, (height + step) as u32)
+    );
+}
+
+#[test]
+fn shallow_pinned_header_keeps_nearby_alignment_evidence() {
+    let (width, height, shift, header) = (192, 384, 100, 30);
+    let stride = width * 4;
+    let mut document = vec![240; stride * (height + shift)];
+    for (start, end) in [(shift + 32, shift + 48), (shift + 220, shift + 226)] {
+        document[start * stride..end * stride].copy_from_slice(&pixels(
+            width,
+            end - start,
+            start,
+            0,
+        ));
+    }
+    let fixed = pixels(width, header, 2_000, 0);
+    let viewport = |start: usize| {
+        let mut frame = document[start * stride..(start + height) * stride].to_vec();
+        frame[..header * stride].copy_from_slice(&fixed);
+        frame
+    };
+    let previous = viewport(0);
+    let current = viewport(shift);
+    let a = FrameView::new(&previous, width, height, stride).unwrap();
+    let b = FrameView::new(&current, width, height, stride).unwrap();
+    let previous = Frame::from_view(&a, a.signature());
+    assert_eq!(
+        displacement(&previous, &b, &b.signature(), MatchOptions::CALIBRATED),
+        Some(shift)
+    );
+}
+
+#[test]
 fn calibrated_capture_crops_fixed_edges_and_replays_initial_content_exactly() {
     let dir = TestDirectory::new();
     let mut session = CalibratedSession::new(&dir.0).unwrap();
@@ -367,6 +443,51 @@ fn calibrated_capture_preserves_clean_full_frame_and_ignores_duplicate_evidence(
     session.finish(&output).unwrap();
     let (w, h, actual) = decode_png(&output);
     assert_eq!((w, h), (96, 188));
+    assert_eq!(actual, pixels(w, h, 0, 0));
+}
+
+#[test]
+fn calibrated_capture_stitches_past_a_header_that_becomes_sticky() {
+    let dir = TestDirectory::new();
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    let (width, height) = (256, 192);
+    let stride = width * 4;
+    let header_start = 64;
+    let header = pixels(width, 58, header_start, 0);
+    let viewport = |start| {
+        let mut frame = pixels(width, height, start, 0);
+        if start > header_start {
+            for y in 0..58 {
+                let portion = y * stride + 16 * 4..y * stride + 160 * 4;
+                frame[portion.clone()].copy_from_slice(&header[portion]);
+            }
+        }
+        frame
+    };
+
+    for (index, start) in [0, 16, 32, 48, 80, 144, 208, 256].into_iter().enumerate() {
+        let progress = session
+            .append(&viewport(start), width, height, stride)
+            .unwrap();
+        assert_eq!(
+            progress.disposition,
+            if index < 3 { 4 } else { 0 },
+            "offset {start}"
+        );
+        assert_eq!(
+            progress.height,
+            (height + if index < 3 { 0 } else { start }) as u32
+        );
+    }
+    let disconnected = session
+        .append(&viewport(1000), width, height, stride)
+        .unwrap();
+    assert_eq!(disconnected.disposition, 2);
+
+    let output = dir.0.join("sticky.png");
+    session.finish(&output).unwrap();
+    let (w, h, actual) = decode_png(&output);
+    assert_eq!((w, h), (width, height + 256));
     assert_eq!(actual, pixels(w, h, 0, 0));
 }
 

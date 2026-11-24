@@ -58,14 +58,16 @@ struct StorageTests {
         }
     }
 
-    @Test func testSavePublishesCopyAndPreservesSessionSource() throws {
+    @Test(arguments: [false, true]) func testSavePublishesCopyAndPreservesSessionSource(isPartial: Bool) throws {
         try withStore { store, fixture in
             let session = try store.newSession()
             let source = try store.writePNG(makeImage(), in: session)
             let originalData = try Data(contentsOf: source)
-            let artifact = CaptureArtifact(id: UUID(), url: source, kind: .image, width: 7, height: 5)
+            let artifact = CaptureArtifact(id: UUID(), url: source, kind: .image, width: 7, height: 5, isPartial: isPartial)
             let saved = try store.save(artifact, folder: fixture.appendingPathComponent("exported"))
             #expect(saved.isSaved)
+            #expect(saved.isPartial == isPartial)
+            #expect(saved.url.lastPathComponent.hasPrefix("Karuto Partial ") == isPartial)
             #expect(saved.id == artifact.id)
             #expect(saved.url != source)
             #expect(try Data(contentsOf: saved.url) == originalData)

@@ -11,6 +11,13 @@ pub struct ContentRect {
     pub height: u32,
 }
 impl ContentRect {
+    fn fits(self, width: usize, height: usize) -> bool {
+        self.width >= 16
+            && self.height >= 32
+            && self.x as usize + self.width as usize <= width
+            && self.y as usize + self.height as usize <= height
+    }
+
     fn view<'a>(&self, frame: &'a FrameView<'a>) -> FrameView<'a> {
         let offset = self.y as usize * frame.stride + self.x as usize * 4;
         FrameView {
@@ -27,6 +34,7 @@ pub struct CalibratedSession {
     samples: Vec<Frame>,
     input_size: Option<(usize, usize)>,
     pub rect: Option<ContentRect>,
+    hint: Option<ContentRect>,
     rejected: bool,
     retried_initial_motion: bool,
 }
@@ -37,10 +45,19 @@ impl CalibratedSession {
             samples: Vec::new(),
             input_size: None,
             rect: None,
+            hint: None,
             rejected: false,
             retried_initial_motion: false,
         })
     }
+    pub fn set_hint(&mut self, rect: ContentRect) -> bool {
+        if self.input_size.is_some() {
+            return false;
+        }
+        self.hint = Some(rect);
+        true
+    }
+
     fn pending(&self, disposition: i32) -> Progress {
         let (w, h) = self.input_size.unwrap_or((0, 0));
         Progress {
@@ -61,14 +78,14 @@ impl CalibratedSession {
             return Err("The capture dimensions changed. Start a new scrolling capture.".into());
         }
         self.input_size = Some((width, height));
-        if self.inner.started.elapsed() >= MAX_DURATION {
-            return Ok(self.pending(3));
-        }
         if let Some(rect) = self.rect {
             let view = rect.view(&input);
             return self
                 .inner
                 .append(view.bytes, view.width, view.height, view.stride);
+        }
+        if self.inner.started.elapsed() >= MAX_DURATION {
+            return Ok(self.pending(3));
         }
         if self.rejected {
             return Ok(self.pending(2));
@@ -84,7 +101,10 @@ impl CalibratedSession {
         if self.samples.len() < 4 {
             return Ok(self.pending(4));
         }
-        let Some(rect) = verified_rect(&self.samples) else {
+        let suggested = self.hint.filter(|rect| {
+            rect.fits(width, height) && verifies(&self.samples, *rect, MatchOptions::PINNED_HEADER)
+        });
+        let Some(rect) = suggested.or_else(|| verified_rect(&self.samples)) else {
             // A hover or scrollbar repaint can precede the first actual movement.
             // Keep the baseline and require three verified pairs on the retry.
             if !self.retried_initial_motion {
@@ -96,9 +116,10 @@ impl CalibratedSession {
             self.rejected = true;
             return Ok(self.pending(2));
         };
-        // Replay all retained samples through the strict matcher before publishing
+        // Replay all retained samples through the same matcher before publishing
         // a verified crop. Every sample contributes its actual new rows.
         let samples = std::mem::take(&mut self.samples);
+        self.inner.match_options = MatchOptions::CALIBRATED;
         let mut result = self.inner.progress(4);
         for sample in samples {
             let raw = sample.view();
@@ -161,50 +182,136 @@ fn verified_rect(samples: &[Frame]) -> Option<ContentRect> {
     for (y, count) in rows.iter_mut().enumerate() {
         *count = (left..right).filter(|x| changed[y * w + x]).count();
     }
-    let top = rows
+    let mut top = rows
         .iter()
         .position(|n| *n >= ((right - left) / 100).max(3))?;
-    let bottom = rows
+    let mut bottom = rows
         .iter()
         .rposition(|n| *n >= ((right - left) / 100).max(3))?
         + 1;
     if bottom - top < 32 {
         return None;
     }
-    // Do not trim blank margins just because they supplied no motion evidence.
-    // A discarded edge must also contain contrast that demonstrably stayed put.
-    if !stationary_contrast(samples, 0, 0, left, h) {
-        left = 0;
-    }
-    if !stationary_contrast(samples, right, 0, w, h) {
-        right = w;
-    }
-    let top = if stationary_contrast(samples, left, 0, right, top) {
-        top
+    // Find real pane edges before deciding that quiet margins belong to fixed
+    // chrome. Test only the moving height so a footer cannot trim the sides.
+    left = (1..=left)
+        .rev()
+        .find(|&x| pane_edge(samples, x, top, bottom, Edge::Left))
+        .unwrap_or_else(|| {
+            if stationary_side(samples, 0, left, top, bottom) {
+                left
+            } else {
+                0
+            }
+        });
+    right = (right..w)
+        .find(|&x| pane_edge(samples, x, top, bottom, Edge::Right))
+        .unwrap_or_else(|| {
+            if stationary_side(samples, right, w, top, bottom) {
+                right
+            } else {
+                w
+            }
+        });
+
+    if stationary_contrast(samples, left, 0, right, top) {
+        // Padding just inside a bordered pane can be visually quiet.
+        top = (top.saturating_sub(4).max(1)..=top)
+            .rev()
+            .find(|&y| pane_edge(samples, y, left, right, Edge::Top))
+            .unwrap_or(top);
     } else {
-        0
-    };
-    let bottom = if stationary_contrast(samples, left, bottom, right, h) {
-        bottom
+        top = 0;
+    }
+    if stationary_contrast(samples, left, bottom, right, h) {
+        bottom = (bottom..(bottom + 5).min(h))
+            .find(|&y| pane_edge(samples, y, left, right, Edge::Bottom))
+            .unwrap_or(bottom);
     } else {
-        h
-    };
+        bottom = h;
+    }
+
+    // Preserve quiet edges when the full pane agrees. When the pane fills
+    // both sides and extends to the bottom, keep its initial pinned band once.
+    if left == 0 && right == w && (top > 0 || bottom < h) {
+        let full = ContentRect {
+            x: 0,
+            y: 0,
+            width: w as u32,
+            height: h as u32,
+        };
+        let options = MatchOptions {
+            top_overlay: bottom == h && top <= h / 3,
+            repaint: false,
+        };
+        if verifies(samples, full, options) {
+            return Some(full);
+        }
+    }
     let rect = ContentRect {
         x: left as u32,
         y: top as u32,
         width: (right - left) as u32,
         height: (bottom - top) as u32,
     };
-    for pair in samples.windows(2) {
+    (rect.fits(w, h) && verifies(samples, rect, MatchOptions::CALIBRATED)).then_some(rect)
+}
+
+fn verifies(samples: &[Frame], rect: ContentRect, options: MatchOptions) -> bool {
+    samples.windows(2).all(|pair| {
         let a_raw = pair[0].view();
         let b_raw = pair[1].view();
         let a = rect.view(&a_raw);
         let b = rect.view(&b_raw);
         let previous = Frame::from_view(&a, a.signature());
         // A gesture can begin with a single pixel of uniquely matched motion.
-        displacement(&previous, &b, &b.signature())?;
+        displacement(&previous, &b, &b.signature(), options).is_some()
+    })
+}
+
+enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// A persistent transition with the stationary pixel on the outside of a pane.
+fn pane_edge(samples: &[Frame], position: usize, start: usize, end: usize, side: Edge) -> bool {
+    if end <= start || position == 0 {
+        return false;
     }
-    Some(rect)
+    let vertical = matches!(side, Edge::Left | Edge::Right);
+    let before = matches!(side, Edge::Left | Edge::Top);
+    let width = samples[0].width;
+    let stride = ((end - start) / 64).max(1);
+    let mut total = 0;
+    let mut stable = 0;
+    for at in (start..end).step_by(stride) {
+        let index = |offset| {
+            if vertical {
+                (at * width + offset) * 4
+            } else {
+                (offset * width + at) * 4
+            }
+        };
+        let inner = index(if before { position } else { position - 1 });
+        let outer = index(if before { position - 1 } else { position });
+        let reference = &samples[0].pixels[outer..outer + 4];
+        let supported = samples
+            .iter()
+            .filter(|frame| {
+                difference(reference, &frame.pixels[outer..outer + 4]) <= 9
+                    && difference(
+                        &frame.pixels[outer..outer + 4],
+                        &frame.pixels[inner..inner + 4],
+                    ) > 18
+            })
+            .count();
+        total += 1;
+        stable += usize::from(supported >= 3);
+    }
+    stable * 4 >= total * 3
 }
 
 fn widest_run(active: &[bool], bridge: usize) -> Option<(usize, usize)> {
@@ -232,6 +339,18 @@ fn widest_run(active: &[bool], bridge: usize) -> Option<(usize, usize)> {
         }
     }
     best
+}
+
+fn stationary_side(samples: &[Frame], x0: usize, x1: usize, top: usize, bottom: usize) -> bool {
+    // A small floating control does not establish a fixed vertical sidebar.
+    (0..3)
+        .filter(|band| {
+            let y0 = top + (bottom - top) * band / 3;
+            let y1 = top + (bottom - top) * (band + 1) / 3;
+            stationary_contrast(samples, x0, y0, x1, y1)
+        })
+        .count()
+        >= 2
 }
 
 fn stationary_contrast(samples: &[Frame], x0: usize, y0: usize, x1: usize, y1: usize) -> bool {

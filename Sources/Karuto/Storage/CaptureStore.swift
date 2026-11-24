@@ -73,7 +73,8 @@ final class CaptureStore: Sendable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         let ext = artifact.kind == .video ? "mp4" : "png"
-        let name = "Karuto \(formatter.string(from: Date())) \(artifact.id.uuidString.prefix(6)).\(ext)"
+        let label = artifact.isPartial ? "Karuto Partial" : "Karuto"
+        let name = "\(label) \(formatter.string(from: Date())) \(artifact.id.uuidString.prefix(6)).\(ext)"
         let destination = folder.appendingPathComponent(name)
         try copyAtomically(from: artifact.url, to: destination)
         var saved = artifact

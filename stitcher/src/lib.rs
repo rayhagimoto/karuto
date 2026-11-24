@@ -1,7 +1,8 @@
 //! Bounded vertical screenshot stitching. The caller owns capture and scrolling.
 mod calibration;
 mod png;
-use calibration::{CalibratedSession, ContentRect};
+use calibration::CalibratedSession;
+pub use calibration::ContentRect;
 
 use std::ffi::{CStr, c_char};
 use std::fs::{self, File, OpenOptions};
@@ -25,7 +26,8 @@ type Result<T> = std::result::Result<T, String>;
 pub struct Progress {
     pub width: u32,
     pub height: u32,
-    /// 0 accepted, 1 unchanged, 2 reconnect required, 3 limit reached.
+    /// 0 accepted, 1 unchanged, 2 reconnect required, 3 limit reached,
+    /// 4 checking content, 5 returned to the last accepted viewport.
     pub disposition: i32,
 }
 
@@ -96,13 +98,39 @@ impl<'a> FrameView<'a> {
     fn row(&self, y: usize) -> &[u8] {
         &self.bytes[y * self.stride..y * self.stride + self.width * 4]
     }
+    fn shares_exact_rows(&self, next: &Self, shift: usize) -> bool {
+        // Leave the outer two pixels free for a scrollbar or compositor edge.
+        let columns = 8..(self.width - 2) * 4;
+        (0..self.height - shift)
+            .all(|y| self.row(y + shift)[columns.clone()] == next.row(y)[columns.clone()])
+    }
+    fn below(&self, rows: usize) -> Self {
+        Self {
+            bytes: &self.bytes[rows * self.stride..],
+            height: self.height - rows,
+            ..*self
+        }
+    }
+    fn edge_signature(&self) -> Vec<u8> {
+        let mut result = vec![0u8; self.height * 32];
+        let stride = (self.width / 320).max(1);
+        for y in 0..self.height {
+            let row = self.row(y);
+            for x in (2..self.width - 2).step_by(stride) {
+                if horizontal_edge(row, x).unsigned_abs() >= 18 {
+                    result[y * 32 + x * 32 / self.width] += 1;
+                }
+            }
+        }
+        result
+    }
     fn signature(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(self.height * 32);
         for y in 0..self.height {
             let row = self.row(y);
             for x in sample_columns(self.width) {
                 let p = &row[x * 4..x * 4 + 4];
-                result.push(((29 * p[0] as u32 + 150 * p[1] as u32 + 77 * p[2] as u32) >> 8) as u8);
+                result.push(luminance(p));
             }
         }
         result
@@ -131,75 +159,197 @@ fn signature_error(a: &[u8], b: &[u8], shift: usize, height: usize, coarse: bool
     sum as f64 / (count * 32) as f64
 }
 
-fn pixel_match(a: FrameView<'_>, b: &FrameView<'_>, shift: usize) -> bool {
+fn luminance(pixel: &[u8]) -> u8 {
+    ((29 * pixel[0] as u32 + 150 * pixel[1] as u32 + 77 * pixel[2] as u32) >> 8) as u8
+}
+
+fn horizontal_edge(row: &[u8], x: usize) -> i16 {
+    i16::from(luminance(&row[x * 4..])) - i16::from(luminance(&row[(x - 1) * 4..]))
+}
+
+/// Compare ink near the sides as well as the body. Weight contrast independently
+/// of large flat fills, which can look identical at an unrelated scroll offset.
+fn pixel_match(a: &FrameView<'_>, b: &FrameView<'_>, shift: usize, repaint: bool) -> bool {
     let overlap = a.height - shift;
-    let rows = 64.min(overlap);
-    let mut differences = 0u64;
+    let column_step = (a.width / 256).max(1);
+    let row_step = (overlap / 256).max(1);
+    let mut differences = 0usize;
     let mut mismatches = 0usize;
     let mut samples = 0usize;
-    let mut informative = [0usize; 3];
-    for r in 0..rows {
-        let y = r * (overlap - 1) / (rows - 1).max(1);
+    let mut edges = 0usize;
+    let mut edge_mismatches = 0usize;
+    let mut first_anchor = None;
+    let mut last_anchor = 0;
+    let mut anchor_rows = 0;
+    for y in (0..overlap).step_by(row_step) {
         let ar = a.row(y + shift);
         let br = b.row(y);
-        for x in sample_columns(a.width) {
+        let mut anchors = 0;
+        for x in (2..a.width - 2).step_by(column_step) {
             let p = x * 4;
-            let diff: u32 = (0..3).map(|c| ar[p + c].abs_diff(br[p + c]) as u32).sum();
-            differences += diff as u64;
+            let diff = (0..3)
+                .map(|c| ar[p + c].abs_diff(br[p + c]) as usize)
+                .sum::<usize>();
+            differences += diff;
             mismatches += usize::from(diff > 36);
             samples += 1;
-            let neighbor = ((x + 1).min(a.width - 1)) * 4;
-            let edge: u32 = (0..3)
-                .map(|c| ar[p + c].abs_diff(ar[neighbor + c]) as u32)
-                .sum();
-            let vertical_edge = if y + shift + 1 < a.height {
-                let next = a.row(y + shift + 1);
-                (0..3).map(|c| ar[p + c].abs_diff(next[p + c]) as u32).sum()
-            } else {
-                0
-            };
-            if edge.max(vertical_edge) > 24 {
-                informative[(r * 3 / rows).min(2)] += 1;
+            let a_edge = horizontal_edge(ar, x);
+            let b_edge = horizontal_edge(br, x);
+            if a_edge.unsigned_abs().max(b_edge.unsigned_abs()) >= 22 {
+                edges += 1;
+                if a_edge.signum() == b_edge.signum()
+                    && a_edge.unsigned_abs().min(b_edge.unsigned_abs()) >= 13
+                {
+                    anchors += 1;
+                } else {
+                    edge_mismatches += 1;
+                }
+            } else if !repaint
+                && diff <= 18
+                && y + shift + 1 < a.height
+                && luminance(&ar[p..]).abs_diff(luminance(&a.row(y + shift + 1)[p..])) >= 24
+            {
+                anchors += 1;
             }
         }
+        if anchors >= 2 {
+            first_anchor.get_or_insert(y);
+            last_anchor = y;
+            anchor_rows += 1;
+        }
     }
-    differences as f64 / (samples * 3) as f64 <= 2.5
-        && mismatches * 100 <= samples * 2
-        && informative.iter().all(|count| *count >= 3)
+    let spread = last_anchor - first_anchor.unwrap_or(last_anchor);
+    let distinctive = anchor_rows >= 3 && spread >= (overlap / 5).max(2);
+    let edges_agree = edge_mismatches * 100 <= edges * if repaint { 12 } else { 24 };
+    distinctive
+        && edges_agree
+        && if repaint {
+            edges >= 24
+        } else {
+            differences <= samples * 7 && mismatches * 100 <= samples * 3
+        }
+}
+
+#[derive(Clone, Copy)]
+struct MatchOptions {
+    top_overlay: bool,
+    repaint: bool,
+}
+
+impl MatchOptions {
+    const STRICT: Self = Self {
+        top_overlay: false,
+        repaint: false,
+    };
+    const CALIBRATED: Self = Self {
+        top_overlay: true,
+        repaint: true,
+    };
+    const PINNED_HEADER: Self = Self {
+        top_overlay: true,
+        repaint: false,
+    };
 }
 
 /// Returns only a forward displacement supported by a unique image match.
-fn displacement(previous: &Frame, next: &FrameView<'_>, signature: &[u8]) -> Option<usize> {
+fn displacement(
+    previous: &Frame,
+    next: &FrameView<'_>,
+    signature: &[u8],
+    options: MatchOptions,
+) -> Option<usize> {
+    let a = previous.view();
+    let min_overlap = (a.height / 3).max(24);
+    let full = matching_displacement(&a, &previous.signature, next, signature, min_overlap, false);
+    if full.is_some() {
+        return full;
+    }
+
+    if options.top_overlay {
+        // Sticky UI can obscure the leading edge only. Ignore it for alignment
+        // while preserving a substantial overlap and appending the untouched tail.
+        // Try a shallow inset first so landmarks just beneath a toolbar survive.
+        for top in [
+            a.height / 12,
+            a.height / 8,
+            a.height / 4,
+            a.height / 3,
+            a.height * 5 / 12,
+            a.height / 2,
+        ] {
+            let min_body_overlap = ((a.height - top) / 3).max(24);
+            if a.height - top <= min_body_overlap {
+                break;
+            }
+            if let Some(shift) = matching_displacement(
+                &a.below(top),
+                &previous.signature[top * 32..],
+                &next.below(top),
+                &signature[top * 32..],
+                min_body_overlap,
+                false,
+            ) {
+                return Some(shift);
+            }
+        }
+    }
+
+    options
+        .repaint
+        .then(|| {
+            matching_displacement(
+                &a,
+                &a.edge_signature(),
+                next,
+                &next.edge_signature(),
+                min_overlap,
+                true,
+            )
+        })
+        .flatten()
+}
+
+fn matching_displacement(
+    previous: &FrameView<'_>,
+    previous_signature: &[u8],
+    next: &FrameView<'_>,
+    signature: &[u8],
+    min_overlap: usize,
+    repaint: bool,
+) -> Option<usize> {
     let h = previous.height;
-    let min_overlap = (h / 3).max(24);
     let mut candidates: Vec<(usize, f64)> = (1..=h - min_overlap)
         .map(|d| {
             (
                 d,
-                signature_error(&previous.signature, signature, d, h, true),
+                signature_error(previous_signature, signature, d, h, true),
             )
         })
         .collect();
     candidates.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-    // Repeated/blank content often has many equally plausible offsets; reject it.
-    let candidate = candidates.first()?.0;
-    let best = signature_error(&previous.signature, signature, candidate, h, false);
-    if best > 2.5 {
+    // Rescore plausible offsets on every overlap row before checking color or ink.
+    let mut refined: Vec<_> = candidates
+        .iter()
+        .take(16)
+        .map(|&(shift, _)| {
+            (
+                shift,
+                signature_error(previous_signature, signature, shift, h, false),
+            )
+        })
+        .collect();
+    refined.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+    let &(candidate, best) = refined.first()?;
+    let ambiguity = if repaint { 0.035 } else { 0.75 };
+    if best > 2.5
+        || refined
+            .iter()
+            .skip(1)
+            .any(|&(other, score)| other.abs_diff(candidate) > 2 && score < best + ambiguity)
+    {
         return None;
     }
-    for (other, coarse_score) in candidates.iter().skip(1).take(15) {
-        if other.abs_diff(candidate) <= 2 {
-            continue;
-        }
-        if *coarse_score > 12.0 {
-            continue;
-        }
-        let score = signature_error(&previous.signature, signature, *other, h, false);
-        if score < best + 0.75 {
-            return None;
-        }
-    }
-    pixel_match(previous.view(), next, candidate).then_some(candidate)
+    pixel_match(previous, next, candidate, repaint).then_some(candidate)
 }
 
 pub struct Session {
@@ -210,6 +360,8 @@ pub struct Session {
     started: Instant,
     finished: bool,
     failed: bool,
+    match_options: MatchOptions,
+    rejected_overlap: bool,
 }
 
 impl Session {
@@ -232,6 +384,8 @@ impl Session {
             started: Instant::now(),
             finished: false,
             failed: false,
+            match_options: MatchOptions::STRICT,
+            rejected_overlap: false,
         })
     }
     fn progress(&self, disposition: i32) -> Progress {
@@ -264,12 +418,30 @@ impl Session {
                         "The capture dimensions changed. Start a new scrolling capture.".into(),
                     );
                 }
+                let baseline = previous.view();
                 if signature_error(&previous.signature, &signature, 0, height, false) <= 0.5 {
+                    if self.rejected_overlap && baseline.shares_exact_rows(&view, 0) {
+                        self.rejected_overlap = false;
+                        return Ok(self.progress(5));
+                    }
                     return Ok(self.progress(1));
                 }
-                match displacement(previous, &view, &signature) {
+                // After a gap, coincidentally similar rows must not reconnect
+                // the capture. Require exact overlap or return to its last view.
+                let options = if self.rejected_overlap {
+                    MatchOptions::STRICT
+                } else {
+                    self.match_options
+                };
+                let matched = displacement(previous, &view, &signature, options).filter(|&shift| {
+                    !self.rejected_overlap || baseline.shares_exact_rows(&view, shift)
+                });
+                match matched {
                     Some(delta) => delta,
-                    None => return Ok(self.progress(2)),
+                    None => {
+                        self.rejected_overlap = true;
+                        return Ok(self.progress(2));
+                    }
                 }
             }
         };
@@ -297,6 +469,7 @@ impl Session {
             return Err(format!("Could not write scrolling capture: {e}"));
         }
         self.previous = Some(replacement);
+        self.rejected_overlap = false;
         self.height = new_height;
         Ok(self.progress(0))
     }
@@ -486,6 +659,31 @@ pub unsafe extern "C" fn sx_stitcher_content_rect(
             None => 0,
         },
         StitchSession::Strict(_) => 0,
+    }
+}
+
+/// Supply a structural suggestion before the first frame. Pixel verification
+/// still decides whether the suggested viewport is usable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sx_stitcher_set_content_hint(
+    handle: *mut SXStitcher,
+    rect: ContentRect,
+) -> i32 {
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return -1;
+    };
+    let Ok(mut session) = handle.session.lock() else {
+        return -1;
+    };
+    match &mut *session {
+        StitchSession::Calibrated(session) => {
+            if session.set_hint(rect) {
+                0
+            } else {
+                -1
+            }
+        }
+        _ => -1,
     }
 }
 

@@ -205,7 +205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let coordinator else { return .terminateNow }
         if coordinator.phase == .recording || coordinator.phase == .scrolling {
             isTerminating = true
-            coordinator.stop { NSApp.reply(toApplicationShouldTerminate: true) }
+            coordinator.stop { [weak self, weak coordinator] in
+                let finished = coordinator?.phase != .scrolling
+                if !finished { self?.isTerminating = false }
+                NSApp.reply(toApplicationShouldTerminate: finished)
+            }
             return .terminateLater
         }
         if coordinator.phase == .finalizing { return .terminateCancel }

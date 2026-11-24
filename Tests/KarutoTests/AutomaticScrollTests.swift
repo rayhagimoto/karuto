@@ -32,6 +32,14 @@ struct AutomaticScrollTests {
         #expect(timing.quietInterval == .milliseconds(570))
     }
 
+    @Test func reportedBottomNeedsTimeForDelayedContent() {
+        let timing = AutomaticScrollTiming()
+        #expect(!timing.hasConfirmedEnd(quietFor: .milliseconds(380), probes: 2, reportsBottom: true))
+        #expect(!timing.hasConfirmedEnd(quietFor: .milliseconds(850), probes: 1, reportsBottom: false))
+        #expect(timing.hasConfirmedEnd(quietFor: .milliseconds(850), probes: 1, reportsBottom: true))
+        #expect(timing.hasConfirmedEnd(quietFor: .milliseconds(850), probes: 2, reportsBottom: false))
+    }
+
     @Test func automaticStepsWaitForTheRequestedDistanceInRetinaPixels() {
         var progress = AutomaticScrollProgress()
         func frame(_ height: Int, _ disposition: Int) -> StitchProgress {
@@ -43,7 +51,7 @@ struct AutomaticScrollTests {
         progress.observe(frame(900, 0))
         let before = progress
         let step = before.scrollStep(sourceHeight: 500, retrying: false)
-        #expect(step == 200)
+        #expect(step == 133)
         progress.observe(frame(940, 0))
         #expect(!progress.covered(step: step, since: before, sourceHeight: 500))
         progress.observe(frame(1300, 0))

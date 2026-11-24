@@ -34,11 +34,13 @@ enum ScrollingCaptureCommand {
         let scratch = output.deletingLastPathComponent().appendingPathComponent(".karuto-scroll-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: scratch) }
-        let stitcher = try StitchingSession(directory: scratch, detectScrollContent: true)
-        defer { stitcher.cancel() }
         let driver = ScrollCaptureDriver()
         driver.prepare(target: target, catalog: catalog)
         defer { driver.stop() }
+        let hint = await driver.contentHint()
+        let stitcher = try StitchingSession(directory: scratch, detectScrollContent: true, contentHint: hint,
+                                            waitForBaseline: !manual)
+        defer { stitcher.cancel() }
         let completion = ScrollCompletion()
         let timer = Task { @MainActor in
             do { try await Task.sleep(for: .seconds(duration)) } catch { return }
@@ -60,7 +62,8 @@ enum ScrollingCaptureCommand {
                 catch { completion.resolve(.failure(error)) }
             }
         } else {
-            driver.startAutomatic(drainFrames: engine.waitForPendingFrames, onFinish: { completion.resolve(.success(())) }, onManualFallback: { reason in
+            driver.startAutomatic(drainFrames: engine.waitForPendingFrames,
+                                  beginMotion: { try stitcher.beginMotion(force: $0) }, onFinish: { completion.resolve(.success(())) }, onManualFallback: { reason in
                 if stitcher.needsAreaAdjustment {
                     completion.resolve(.failure(KarutoCLI.Failure("Could not verify one moving pane. Adjust --area and retry.", code: 1)))
                     return
@@ -74,9 +77,14 @@ enum ScrollingCaptureCommand {
         try result.get()
         let partial = scratch.appendingPathComponent("capture.png")
         let verified = stitcher.verifiedContentRect
-        let size = try await Task.detached { try stitcher.finish(to: partial) }.value
+        let reason = stitcher.partialReason
+        let size = try await Task.detached { try stitcher.finish(to: partial, allowPartial: manual) }.value
         try FileManager.default.moveItem(at: partial, to: output)
         var response: [String: Any] = ["path": output.path, "type": "image", "width": size.width, "height": size.height, "scrolling": manual ? "manual" : "automatic"]
+        if let reason {
+            response["partial"] = true
+            response["partial_reason"] = reason
+        }
         if let verified {
             response["content_rect"] = ["x": verified.minX, "y": verified.minY, "width": verified.width, "height": verified.height]
         }

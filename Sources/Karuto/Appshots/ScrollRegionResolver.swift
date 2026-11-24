@@ -46,6 +46,13 @@ actor ScrollRegionResolver {
         }
     }
 
+    func paneBounds(pid: Int32, point: CGPoint, selection: CGRect, window: CGRect) -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        return firstScrollArea(pid: pid, at: point) { _, bounds in
+            Self.clippedCandidate(bounds, point: point, window: window, display: selection)
+        }
+    }
+
     /// Only trust the nearest scroll area's range when its bounds agree with
     /// the moving pixels. An enclosing page can be at its end while a child scrolls.
     func scrollPosition(pid: Int32, point: CGPoint, verifiedBounds: CGRect) -> ScrollPosition {

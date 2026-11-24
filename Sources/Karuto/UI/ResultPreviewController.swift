@@ -82,8 +82,9 @@ final class ResultPreviewController {
             image.heightAnchor.constraint(equalToConstant: previewHeight)
         ])
 
+        let imageLabel = artifact.isPartial ? "Partial PNG" : "PNG"
         let details = artifact.kind == .image
-            ? "PNG · \(artifact.width) × \(artifact.height)"
+            ? "\(imageLabel) · \(artifact.width) × \(artifact.height)"
             : "MP4 · \(Int(artifact.duration))s · \(artifact.width) × \(artifact.height)"
         let info = captureLabel(details, size: 10, color: .secondaryLabelColor)
         info.lineBreakMode = .byTruncatingTail

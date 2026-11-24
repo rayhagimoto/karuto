@@ -28,6 +28,8 @@ final class CaptureCoordinator {
     private let scrollDriver = ScrollCaptureDriver()
     private var scrollingAutomatically = false
     private var scrollingNeedsAdjustment = false
+    private var reviewingPartialScroll = false
+    private var scrollInterruption: String?
     private var scrollInputPoint: CGPoint?
     private let scrollContentGuide = ScrollContentGuide()
     private var scrollingStarted: Date?
@@ -64,7 +66,10 @@ final class CaptureCoordinator {
         }
         captureUI.onOpenPreferences = { [weak self] in self?.showSettings() }
         captureUI.onOpenKeymap = { [weak self] in self?.showKeymap() }
-        controls.onStop = { [weak self] in self?.stop() }
+        controls.onStop = { [weak self] in
+            guard let self else { return }
+            stop(allowPartial: reviewingPartialScroll)
+        }
         controls.onCancel = { [weak self] in self?.cancel() }
         controls.onReselect = { [weak self] in
             self?.cancel { [weak self] in self?.openToolbar(initialRegion: .scrolling) }
@@ -209,10 +214,14 @@ final class CaptureCoordinator {
                 } else if region == .scrolling {
                     let session = try startFileSession()
                     scrollDriver.prepare(target: target, catalog: catalog, inputPoint: scrollInputPoint)
-                    let sessionStitcher = try StitchingSession(directory: session, detectScrollContent: true)
+                    let contentHint = await scrollDriver.contentHint()
+                    try Task.checkCancellation()
+                    guard operationID == id else { return }
+                    scrollingAutomatically = settings.automaticScrolling
+                    let sessionStitcher = try StitchingSession(directory: session, detectScrollContent: true,
+                                                               contentHint: contentHint, waitForBaseline: scrollingAutomatically)
                     stitcher = sessionStitcher; scrollingStarted = Date()
                     controls.show(title: "Preparing scrolling capture", message: "Starting local capture…", stopTitle: "Cancel")
-                    scrollingAutomatically = settings.automaticScrolling
                     try await engine.startFrames(target: target, automaticScrolling: scrollingAutomatically) { [weak self] frame in
                         do {
                             let progress = try sessionStitcher.append(frame)
@@ -239,7 +248,10 @@ final class CaptureCoordinator {
                     guard !scrollingNeedsAdjustment else { await engine.stopFrames(); return }
                     controls.show(title: scrollingAutomatically ? "Automatic scrolling" : "Manual scrolling · ↑ ↓", message: scrollingAutomatically ? "Keep the target visible. Capturing downward…" : "Scroll down with the trackpad, mouse, or ↓ key.", stopTitle: "Finish", allowsManual: scrollingAutomatically)
                     if scrollingAutomatically {
-                        scrollDriver.startAutomatic(drainFrames: engine.waitForPendingFrames, onFinish: { [weak self] in self?.stop() }, onManualFallback: { [weak self] reason in self?.useManualScrolling(reason) })
+                        scrollDriver.startAutomatic(drainFrames: engine.waitForPendingFrames,
+                                                    beginMotion: { try sessionStitcher.beginMotion(force: $0) },
+                                                    onFinish: { [weak self] in self?.stop() },
+                                                    onManualFallback: { [weak self] reason in self?.useManualScrolling(reason) })
                     } else {
                         scrollDriver.startManual()
                     }
@@ -282,6 +294,12 @@ final class CaptureCoordinator {
     private func useManualScrolling(_ message: String) {
         guard phase == .scrolling, !scrollingNeedsAdjustment else { return }
         scrollDriver.startManual()
+        do {
+            _ = try stitcher?.beginMotion(force: true)
+        } catch {
+            if let operationID { appshotFrameFailed(error, id: operationID) }
+            return
+        }
         scrollingAutomatically = false
         controls.show(title: "Manual scrolling · ↑ ↓", message: message, stopTitle: "Finish")
     }
@@ -295,12 +313,16 @@ final class CaptureCoordinator {
                 guard let self, self.operationID == id else { return }
                 let seconds = Int(Date().timeIntervalSince(began))
                 if self.phase == .recording { self.controls.update(message: String(format: "%02d:%02d", seconds / 60, seconds % 60)) }
-                if self.phase == .scrolling, seconds >= 120 { self.stop(); return }
+                if self.phase == .scrolling, seconds >= 120 {
+                    self.scrollInterruption = "The capture reached its time limit."
+                    self.stop()
+                    return
+                }
             }
         }
     }
 
-    func stop(after completion: (() -> Void)? = nil) {
+    func stop(allowPartial: Bool = false, after completion: (() -> Void)? = nil) {
         guard phase == .recording || phase == .scrolling else {
             if phase == .preparing || phase == .selecting { cancel(after: completion); return }
             completion?(); return
@@ -322,12 +344,23 @@ final class CaptureCoordinator {
                 } else {
                     await engine.stopFrames()
                     guard let stitcher, let directory else { discardAndReset(); return }
+                    let reason = scrollInterruption ?? stitcher.partialReason
+                    if let reason, !allowPartial {
+                        reviewingPartialScroll = true
+                        phase = .scrolling
+                        controls.show(title: "Partial scrolling capture", message: reason,
+                                      stopTitle: "Save Partial", allowsReselect: true)
+                        return
+                    }
                     let partial = directory.appendingPathComponent("Scrolling.partial.png")
-                    let output = try await Task.detached(priority: .userInitiated) { try stitcher.finish(to: partial) }.value
+                    let output = try await Task.detached(priority: .userInitiated) {
+                        try stitcher.finish(to: partial, allowPartial: allowPartial)
+                    }.value
                     guard operationID == id else { return }
-                    let url = directory.appendingPathComponent("Scrolling.png")
+                    let url = directory.appendingPathComponent(reason == nil ? "Scrolling.png" : "Scrolling-Partial.png")
                     try FileManager.default.moveItem(at: partial, to: url)
-                    await complete(CaptureArtifact(id: UUID(), url: url, kind: .image, width: output.width, height: output.height),
+                    await complete(CaptureArtifact(id: UUID(), url: url, kind: .image,
+                                                   width: output.width, height: output.height, isPartial: reason != nil),
                                    autoSave: settings.autoSaveScrollingScreenshots)
                 }
             } catch { if let id { fail(error, id: id) } }
@@ -358,7 +391,10 @@ final class CaptureCoordinator {
         scrollDriver.stop()
         scrollContentGuide.dismiss()
         elapsedTask?.cancel()
-        controls.show(title: "Scrolling paused", message: "\(error.localizedDescription) Finish to save accepted content.", stopTitle: "Finish")
+        scrollInterruption = error.localizedDescription
+        controls.show(title: "Scrolling paused",
+                      message: "\(error.localizedDescription) Choose Finish to review the partial capture.",
+                      stopTitle: "Finish")
         Task { await engine.stopFrames() }
     }
 
@@ -429,6 +465,7 @@ final class CaptureCoordinator {
 
     private func reset() {
         scrollDriver.stop(); scrollingAutomatically = false; scrollingNeedsAdjustment = false
+        reviewingPartialScroll = false; scrollInterruption = nil
         scrollContentGuide.dismiss(); scrollInputPoint = nil
         controls.dismiss(); elapsedTask?.cancel(); elapsedTask = nil
         stitcher = nil; directory = nil; operationID = nil; scrollingStarted = nil; frozenDesktop = nil; phase = .idle
