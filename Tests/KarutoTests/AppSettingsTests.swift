@@ -9,10 +9,14 @@ struct AppSettingsTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults)
+        #expect(settings.autoSaveScrollingScreenshots)
+        settings.autoSaveScrollingScreenshots = false
+        #expect(!AppSettings(defaults: defaults).autoSaveScrollingScreenshots)
         for autoSave in [false, true] {
             settings.autoSave = autoSave
             #expect(settings.automaticallySaves(.video))
             #expect(settings.automaticallySaves(.image) == autoSave)
+            #expect(!settings.autoSaveScrollingScreenshots)
         }
     }
 

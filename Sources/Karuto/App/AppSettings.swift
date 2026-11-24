@@ -39,6 +39,10 @@ final class AppSettings {
         get { defaults.bool(forKey: "autoSave") }
         set { defaults.set(newValue, forKey: "autoSave") }
     }
+    var autoSaveScrollingScreenshots: Bool {
+        get { defaults.object(forKey: "autoSaveScrollingScreenshots") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "autoSaveScrollingScreenshots") }
+    }
     func automaticallySaves(_ kind: ArtifactKind) -> Bool {
         kind == .video || autoSave
     }

@@ -327,7 +327,8 @@ final class CaptureCoordinator {
                     guard operationID == id else { return }
                     let url = directory.appendingPathComponent("Scrolling.png")
                     try FileManager.default.moveItem(at: partial, to: url)
-                    await complete(CaptureArtifact(id: UUID(), url: url, kind: .image, width: output.width, height: output.height))
+                    await complete(CaptureArtifact(id: UUID(), url: url, kind: .image, width: output.width, height: output.height),
+                                   autoSave: settings.autoSaveScrollingScreenshots)
                 }
             } catch { if let id { fail(error, id: id) } }
         }
@@ -403,13 +404,13 @@ final class CaptureCoordinator {
         await complete(artifact, saveOnly: destination == .saveFolder)
     }
 
-    private func complete(_ artifact: CaptureArtifact, saveOnly: Bool = false) async {
+    private func complete(_ artifact: CaptureArtifact, saveOnly: Bool = false, autoSave: Bool? = nil) async {
         phase = .finalizing
         var result = artifact
         var saveError: Error?
         var clipboardError: Error?
         let captureStore = store
-        if saveOnly || settings.automaticallySaves(artifact.kind) {
+        if saveOnly || (autoSave ?? settings.automaticallySaves(artifact.kind)) {
             let folder = settings.saveFolder
             do { result = try await Task.detached(priority: .userInitiated) { try captureStore.save(artifact, folder: folder) }.value }
             catch { saveError = error }

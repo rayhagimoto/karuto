@@ -176,9 +176,13 @@ final class SettingsController: NSObject, NSWindowDelegate {
         case .general:
             let autoSave = NSButton(checkboxWithTitle: "", target: self, action: #selector(autoSaveChanged(_:)))
             autoSave.state = settings.autoSave ? .on : .off
-            autoSave.setAccessibilityLabel("Automatically save captures")
+            autoSave.setAccessibilityLabel("Automatically save screenshots")
             let group = SettingsCard()
-            group.addRow(title: "Automatically save captures", detail: "Save image captures to your save folder. Screen recordings always save there.", control: autoSave)
+            group.addRow(title: "Automatically save screenshots", detail: "Save screenshots to your save folder. Screen recordings always save there.", control: autoSave)
+            let autoSaveScrolling = NSButton(checkboxWithTitle: "", target: self, action: #selector(autoSaveScrollingChanged(_:)))
+            autoSaveScrolling.state = settings.autoSaveScrollingScreenshots ? .on : .off
+            autoSaveScrolling.setAccessibilityLabel("Automatically save scrolling screenshots")
+            group.addRow(title: "Automatically save scrolling screenshots", detail: "Save completed scrolling captures to your save folder.", control: autoSaveScrolling)
             let choose = ClosureButton(title: "Choose…") { [weak self] in self?.chooseFolder() }
             group.addRow(title: "Save folder", detail: settings.saveFolder.path, control: choose)
             folderLabel = group.lastDetailLabel
@@ -261,6 +265,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
         onAppIconChange?()
     }
     @objc private func autoSaveChanged(_ sender: NSButton) { settings.autoSave = sender.state == .on }
+    @objc private func autoSaveScrollingChanged(_ sender: NSButton) { settings.autoSaveScrollingScreenshots = sender.state == .on }
     @objc private func autoCopyChanged(_ sender: NSButton) { settings.autoCopyScreenshots = sender.state == .on }
     @objc private func shadowChanged(_ sender: NSButton) { settings.includeShadow = sender.state == .on }
     @objc private func instantCaptureChanged(_ sender: NSButton) { settings.instantCapture = sender.state == .on }

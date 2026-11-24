@@ -51,7 +51,7 @@ Record an area, window, or display to H.264 MP4. Pick **30, 60, or 120 fps** in 
 
 ### Use the capture preview
 
-Copy, save, reveal, or trash a screenshot from its corner preview. Drag a capture into another app or open a recording in your default player. Settings control how long previews stay visible, whether screenshots save automatically, and whether they copy to the clipboard.
+Copy, save, reveal, or trash a screenshot from its corner preview. Drag a capture into another app or open a recording in your default player. Settings control how long previews stay visible, whether screenshots and scrolling screenshots save automatically, and whether they copy to the clipboard. Scrolling screenshots save automatically by default.
 
 <img src="docs/ui-evidence/result-preview.png" width="308" alt="Corner preview of an annotated map with its PNG dimensions, file size, and action buttons">
 
