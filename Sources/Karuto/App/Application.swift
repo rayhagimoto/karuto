@@ -168,8 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func dispatch(_ action: ShortcutAction) {
+        if let launch = action.overlayLaunch {
+            coordinator?.openToolbar(initialMode: launch.mode, initialRegion: launch.region)
+            return
+        }
         switch action {
-        case .openCapture: coordinator?.openToolbar()
         case .previousArea: coordinator?.capturePrevious()
         case .restoreCapture: coordinator?.restoreRecent()
         case .stopCapture: coordinator?.stop()

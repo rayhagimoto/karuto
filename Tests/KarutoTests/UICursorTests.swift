@@ -15,14 +15,14 @@ struct UICursorTests {
         toolbar.contentView?.layoutSubtreeIfNeeded()
         let views = descendants(toolbar.contentView)
         let selector = try #require(views.compactMap { $0 as? CaptureModeSelector }.first)
-        let buttons = selector.arrangedSubviews.compactMap { $0 as? CaptureActionButton }
+        let buttons = selector.arrangedSubviews.compactMap { $0 as? CaptureToolbarButton }
         let snapshot = try #require(buttons.first)
         let recording = try #require(buttons.last)
-        let timer = try #require(views.compactMap { $0 as? CaptureActionButton }.first { $0.accessibilityLabel() == "Capture timer" })
-        #expect(buttons.map(\.title) == CaptureMode.allCases.map(\.title))
-        #expect(buttons.allSatisfy { $0.image != nil })
+        let timer = try #require(views.compactMap { $0 as? CaptureToolbarButton }.first { $0.accessibilityLabel() == "Capture timer" })
+        #expect(buttons.map { $0.accessibilityLabel() } == CaptureMode.allCases.map(\.title))
+        #expect(buttons.map(\.symbolName) == ["camera", "record.circle"])
         #expect(timer.title.isEmpty)
-        #expect(timer.image != nil)
+        #expect(timer.symbolName == "clock")
         #expect(timer.accessibilityValue() as? String == "Off")
         #expect(snapshot.accessibilityValue() as? Int == 1)
         #expect(snapshot.frame.width >= recording.intrinsicContentSize.width)
@@ -42,12 +42,54 @@ struct UICursorTests {
         #expect(NSApp.sendAction(action, to: threeSeconds.target, from: threeSeconds))
         #expect(timer.accessibilityValue() as? String == "3 seconds")
         #expect(controller.makeTimerMenu().item(withTag: 3)?.state == .on)
+        let icons = views.compactMap { $0 as? CaptureToolbarButton }
+        #expect(icons.allSatisfy { $0.toolTip == $0.accessibilityLabel() })
 
         #expect(controller.handleShortcut(.snapshotMode))
         #expect(snapshot.accessibilityValue() as? Int == 1)
         #expect(timer.accessibilityValue() as? String == "Off")
         #expect(controller.handleShortcut(.recordingMode))
         #expect(timer.accessibilityValue() as? String == "3 seconds")
+    }
+
+    @Test func keyboardMovesBetweenGroupsAndActivatesTools() throws {
+        _ = NSApplication.shared
+        let display = CaptureDisplay(id: 73, name: "Keyboard", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
+        let controller = CaptureUIController()
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        controller.keymap = KeymapController(settings: AppSettings(defaults: defaults))
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        controller.present(catalog: CaptureCatalog(displays: [display], windows: []))
+        defer { controller.dismiss() }
+        let panel = try #require(NSApp.windows.first { $0.contentView is CaptureToolbarView && !existing.contains(ObjectIdentifier($0)) })
+        func key(_ code: UInt16, shift: Bool = false) throws {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [],
+                timestamp: 0, windowNumber: panel.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: code))
+            #expect(controller.handleKeyEvent(event))
+        }
+        func focused() -> String? { (panel.firstResponder as? NSButton)?.accessibilityLabel() }
+        try key(48)
+        #expect(focused() == "Snapshot")
+        try key(48)
+        #expect(focused() == "Area")
+        try key(124)
+        #expect(focused() == "Fullscreen")
+        #expect(controller.selectedRegion == .fullscreen)
+        try key(48)
+        #expect(focused() == "Recognize text")
+        let ocr = try #require(panel.firstResponder as? CaptureToolbarButton)
+        #expect(ocr.toolTip == "Recognize text")
+        let shortcut = try #require(controller.keymap?.configuration.binding(for: .toggleOCR))
+        #expect(ocr.focusHint.contains(shortcut.displayString))
+        try key(49)
+        #expect(controller.capturesText)
+        try key(31)
+        #expect(!controller.capturesText)
+        try key(124)
+        #expect(focused() == "Capture timer")
+        try key(48, shift: true)
+        #expect(focused() == "Fullscreen")
     }
 
     @Test func presentationSetsCrosshairWithoutMovementAndDismissRestoresArrow() throws {
@@ -61,7 +103,7 @@ struct UICursorTests {
         #expect(NSCursor.current === NSCursor.crosshair)
         let toolbar = try #require(NSApp.windows.first { $0.contentView is CaptureToolbarView && $0.isVisible && display.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) })
         toolbar.contentView?.layoutSubtreeIfNeeded()
-        let button = try #require(descendants(toolbar.contentView).first { $0 is CaptureModeButton })
+        let button = try #require(descendants(toolbar.contentView).first { $0.accessibilityLabel() == "Area" })
         controller.refreshCursor(at: toolbar.convertPoint(toScreen: button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)))
         #expect(NSCursor.current === NSCursor.arrow)
         #expect(!descendants(toolbar.contentView).contains { ($0 as? NSTextField)?.isEditable == true })
@@ -79,6 +121,13 @@ struct UICursorTests {
             isARepeat: false, keyCode: 48))
         #expect(controller.handleKeyEvent(tab))
         #expect(field.currentEditor() != nil)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        controller.keymap = KeymapController(settings: AppSettings(defaults: defaults))
+        let o = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: overlay.windowNumber, context: nil, characters: "o", charactersIgnoringModifiers: "o",
+            isARepeat: false, keyCode: 31))
+        #expect(!controller.handleKeyEvent(o))
+        #expect(!controller.capturesText)
         control.endEditing()
         controller.refreshCursor(at: overlay.convertPoint(toScreen: field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)))
         #expect(NSCursor.current === NSCursor.iBeam)

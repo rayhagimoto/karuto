@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class CapturePanel: NSPanel {
@@ -40,109 +41,141 @@ class ClosureButton: NSButton {
 }
 
 
+/// AppKit owns panel focus, menu anchoring and dragging. SwiftUI draws the system symbols.
 @MainActor
-final class CaptureModeButton: ClosureButton {
-    private let iconView = NSImageView()
-    private let labelView = NSTextField(labelWithString: "")
-
-    override var title: String {
-        didSet { labelView.stringValue = title }
-    }
-    override var image: NSImage? {
-        didSet { updateAppearance() }
-    }
-    override var state: NSControl.StateValue {
-        didSet { updateAppearance() }
-    }
-    override var isEnabled: Bool {
-        didSet { updateAppearance() }
-    }
-    override var intrinsicContentSize: NSSize { NSSize(width: 80, height: 54) }
-    // This button draws explicit rows, not the native bezel. Native image-based
-    // alignment insets otherwise extend its layer above the stack's 5pt padding.
+final class CaptureToolbarButton: ClosureButton {
+    private let glyph: NSHostingView<ToolbarGlyph>
+    let showsCheckmark: Bool
+    var focusHint: String
+    var focusChanged: (() -> Void)?
+    var symbolName: String { didSet { if oldValue != symbolName { updateGlyph() } } }
+    var drawsSelection = true
+    private var keyboardFocused = false
+    override var state: NSControl.StateValue { didSet { if oldValue != state { updateGlyph() } } }
+    override var isEnabled: Bool { didSet { if oldValue != isEnabled { updateGlyph() } } }
+    override var isHighlighted: Bool { didSet { if oldValue != isHighlighted { updateGlyph() } } }
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 32) }
 
-    override init(title: String, symbol: String? = nil, handler: (() -> Void)? = nil) {
-        super.init(title: title, symbol: symbol, handler: handler)
+    init(_ label: String, symbol: String, checked: Bool = false, handler: (() -> Void)? = nil) {
+        focusHint = label
+        showsCheckmark = checked
+        symbolName = symbol
+        glyph = NSHostingView(rootView: ToolbarGlyph(symbol: symbol))
+        super.init(title: "", handler: handler)
         isBordered = false
         focusRingType = .none
-        wantsLayer = true
-        layer?.cornerRadius = 11
-        (cell as? NSButtonCell)?.highlightsBy = []
-        (cell as? NSButtonCell)?.showsStateBy = []
-        setAccessibilityRole(.radioButton)
-
-        // The icon occupies its own fixed row. Its original aspect ratio is
-        // preserved, so narrow arrows and wide display symbols are not stretched.
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.imageScaling = .scaleProportionallyDown
-        iconView.imageAlignment = .alignCenter
-        iconView.setAccessibilityElement(false)
-        addSubview(iconView)
-
-        // Every mode shares the same label row and baseline, independent of its
-        // icon's dimensions. Labels never receive text selection or cell tinting.
-        labelView.translatesAutoresizingMaskIntoConstraints = false
-        labelView.stringValue = title
-        labelView.font = .systemFont(ofSize: 13, weight: .regular)
-        labelView.alignment = .center
-        labelView.isSelectable = false
-        labelView.isEditable = false
-        labelView.setAccessibilityElement(false)
-        addSubview(labelView)
-        updateAppearance()
-        NSLayoutConstraint.activate([
-            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            iconView.widthAnchor.constraint(equalToConstant: 24),
-            iconView.heightAnchor.constraint(equalToConstant: 24),
-            labelView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            labelView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            labelView.topAnchor.constraint(equalTo: topAnchor, constant: 33),
-            labelView.heightAnchor.constraint(equalToConstant: 17)
-        ])
+        if checked {
+            setButtonType(.toggle)
+            setAccessibilityRole(.checkBox)
+        }
+        setAccessibilityLabel(label)
+        toolTip = label
+        glyph.sizingOptions = []
+        glyph.setAccessibilityElement(false)
+        pinSubview(glyph, to: self)
+        updateGlyph()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override func setButtonType(_ type: NSButton.ButtonType) {
-        super.setButtonType(type)
-        // Setting the type resets the cell masks; keep toggle tracking tint-only.
-        (cell as? NSButtonCell)?.highlightsBy = []
-        (cell as? NSButtonCell)?.showsStateBy = []
+    private func updateGlyph() {
+        glyph.rootView = ToolbarGlyph(symbol: symbolName,
+                                      selected: state == .on, drawsSelection: drawsSelection, checked: showsCheckmark && state == .on,
+                                      enabled: isEnabled, highlighted: isHighlighted, focused: keyboardFocused,
+                                      dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        if showsCheckmark { setAccessibilityValue(state == .on ? 1 : 0) }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateAppearance()
+        updateGlyph()
     }
 
-    private func updateAppearance() {
-        setAccessibilityValue(state == .on ? 1 : 0)
-        // Event handlers and appearance-change callbacks need not run inside
-        // this view's drawing appearance. Palette images and CGColors resolve
-        // immediately, so use the view's override rather than the system theme.
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let tint = isEnabled ? NSColor.labelColor.withAlphaComponent(state == .on ? 1 : 0.72) : NSColor.disabledControlTextColor
-            let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-                .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
-            iconView.image = image?.withSymbolConfiguration(configuration)
-            labelView.textColor = tint
-            layer?.backgroundColor = state == .on ? NSColor.labelColor.withAlphaComponent(0.055).cgColor : NSColor.clear.cgColor
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            keyboardFocused = true
+            updateGlyph()
+            focusChanged?()
         }
+        return accepted
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+    override func draw(_ dirtyRect: NSRect) {}
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            keyboardFocused = false
+            updateGlyph()
+        }
+        return resigned
+    }
+}
+
+private struct ToolbarGlyph: View {
+    var symbol: String
+    var selected = false
+    var drawsSelection = true
+    var checked = false
+    var enabled = true
+    var highlighted = false
+    var focused = false
+    var dark = false
+
+    // Layer-backed symbols inside native glass need a foreground resolved
+    // against the host appearance, including when SwiftUI redraws a toggle.
+    private var ink: Color { dark ? .white : .black }
+    private var tileOpacity: Double {
+        if highlighted { return 0.18 }
+        if checked { return 0.13 }
+        return selected && drawsSelection ? 0.075 : 0
     }
 
-    // Keep the whole tile as one native button, including clicks on its subviews.
-    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
-    override func draw(_ dirtyRect: NSRect) { /* The two explicit rows draw the contents. */ }
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 17, weight: .regular))
+            .overlay(alignment: .bottomTrailing) {
+                if checked {
+                    Image(systemName: "checkmark.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(dark ? Color.black : Color.white, ink)
+                        .font(.system(size: 10, weight: .bold))
+                        .offset(x: 5, y: 4)
+                }
+            }
+            .overlay(alignment: .trailing) {
+                if symbol == "computermouse" {
+                    Image(systemName: "arrow.up.and.down")
+                        .font(.system(size: 10, weight: .medium))
+                        .offset(x: 9)
+                }
+            }
+        .foregroundStyle(ink.opacity(selected || focused ? 1 : 0.78))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 7)
+                .fill(ink.opacity(tileOpacity))
+        }
+        .overlay {
+            if focused {
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(ink.opacity(0.72), lineWidth: 2)
+            }
+        }
+        .opacity(enabled ? 1 : 0.35)
+        .environment(\.colorScheme, dark ? .dark : .light)
+        .accessibilityHidden(true)
+    }
 }
 
 @MainActor
 final class CaptureModeSelector: NSStackView {
     private let selection = CALayer()
-    private weak var selectedButton: CaptureActionButton?
+    private weak var selectedButton: CaptureToolbarButton?
 
-    init(buttons: [CaptureActionButton]) {
+    init(buttons: [CaptureToolbarButton]) {
         super.init(frame: .zero)
         spacing = 2
         distribution = .fillEqually
@@ -153,7 +186,7 @@ final class CaptureModeSelector: NSStackView {
         setAccessibilityRole(.radioGroup)
         setAccessibilityLabel("Capture mode")
         for button in buttons {
-            button.showsBackground = false
+            button.drawsSelection = false
             button.setAccessibilityRole(.radioButton)
             addArrangedSubview(button)
         }
@@ -163,10 +196,12 @@ final class CaptureModeSelector: NSStackView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func select(_ index: Int) {
-        guard let button = arrangedSubviews[index] as? CaptureActionButton, button !== selectedButton else { return }
+        guard let button = arrangedSubviews[index] as? CaptureToolbarButton, button !== selectedButton else { return }
         let shouldAnimate = selectedButton != nil && window?.isVisible == true
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        selectedButton?.state = .off
         selectedButton?.setAccessibilityValue(0)
+        button.state = .on
         button.setAccessibilityValue(1)
         selectedButton = button
         positionSelection(animated: shouldAnimate)
@@ -184,7 +219,7 @@ final class CaptureModeSelector: NSStackView {
 
     private func updateSelectionColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            selection.backgroundColor = NSColor.labelColor.withAlphaComponent(0.13).cgColor
+            selection.backgroundColor = NSColor.labelColor.withAlphaComponent(0.075).cgColor
         }
     }
 

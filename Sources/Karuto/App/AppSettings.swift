@@ -75,7 +75,7 @@ final class AppSettings {
         let region = CaptureRegion(rawValue: defaults.string(forKey: prefix + ".region") ?? "") ?? .area
         let delay = defaults.integer(forKey: prefix + ".delay")
         return CaptureSessionPreferences(
-            region: mode.supports(region) ? region : .area,
+            region: region == .scrolling ? .area : region,
             delaySeconds: CaptureSessionPreferences.delays.contains(delay) ? delay : 0,
             instantCapture: mode == .snapshot ? instantCapture : defaults.bool(forKey: prefix + ".instant"),
             freezeDisplay: mode == .snapshot && freezeDisplay
@@ -83,7 +83,10 @@ final class AppSettings {
     }
     func saveCapturePreferences(_ preferences: CaptureSessionPreferences, for mode: CaptureMode) {
         let prefix = "capture.\(mode.rawValue)"
-        defaults.set(preferences.region.rawValue, forKey: prefix + ".region")
+        // Scrolling belongs to the current overlay. Preserve the last regular region.
+        if preferences.region != .scrolling {
+            defaults.set(preferences.region.rawValue, forKey: prefix + ".region")
+        }
         defaults.set(preferences.delaySeconds, forKey: prefix + ".delay")
         if mode == .snapshot {
             instantCapture = preferences.instantCapture

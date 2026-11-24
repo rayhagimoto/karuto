@@ -4,7 +4,7 @@
 
 ## Capture mode preferences
 
-The capture toolbar saves the selected region, timer, and Instant Capture separately for Snapshot and Screen Recording. The timer defaults to off. Freeze Display applies to still snapshots with the timer off. When an option changes whether selection uses frozen or live content, Karuto reopens the selection overlay with the new source.
+The capture toolbar saves the selected region, timer, and Instant Capture separately for Snapshot and Screen Recording. Scrolling applies only to the current overlay. The next ordinary launch restores the last Area, Window, or Fullscreen snapshot selection, defaulting to Area. The timer defaults to off. Freeze Display applies to still snapshots with the timer off. When an option changes whether selection uses frozen or live content, Karuto reopens the selection overlay with the new source.
 
 ## Command registry
 
@@ -12,9 +12,11 @@ The capture toolbar saves the selected region, timer, and Instant Capture separa
 
 | Context | Actions | Assigned defaults |
 | --- | --- | --- |
-| Global | Open toolbar, previous area, restore last capture, stop capture | Open toolbar: Control–Shift–2 |
+| Global | Open toolbar, open Area, Window, Fullscreen, Scrolling, or Screen Recording, previous area, restore last capture, stop capture | Open toolbar: Control–Shift–2 |
 | Karuto active, including overlay | Preferences, keyboard shortcuts, close Preferences, quit | Command–comma, Command–Option–comma, Command–W, Command–Q |
 | Capture selection | Confirm, cancel, select last region, undo/redo annotation, Instant Capture, Freeze Display, OCR, capture mode, region, three-second timer toggle | Return, Escape, Command–R, Command–Z, Command–Shift–Z respectively for the first five actions |
+
+The overlay uses **O** to toggle Recognize Text (OCR) by default. A checked text-viewfinder marks OCR as on. Press Tab or Shift–Tab to move between toolbar groups, actions, and available dimension fields. Left and Right change the mode or region, or move focus between tools. Space activates the focused control. Hover an icon to see its name. Keyboard focus hints include your configured shortcuts.
 
 With Instant Capture off, the overlay offers **Copy screenshot without saving** (Command–C) and **Save screenshot to the Save folder** (Command–S) for selected Area, Window, and Fullscreen snapshots. Both bindings can be changed or cleared. OCR and text fields keep their text-copy behavior.
 

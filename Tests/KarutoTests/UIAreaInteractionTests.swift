@@ -636,8 +636,10 @@ struct UIAreaInteractionTests {
             #expect(!fixture.controller.handleKeyEvent(event))
         }
         #expect(fixture.captures.isEmpty)
-        #expect(fixture.view.accessibilityHelp()?.contains("click Capture") == true)
-        #expect(fixture.controller.handleShortcut(.confirmCapture))
+        #expect(fixture.view.accessibilityHelp()?.contains("choose Capture in Capture options") == true)
+        let menu = fixture.controller.makeOptionsMenu()
+        let item = try #require(menu.item(withTitle: "Capture"))
+        menu.performActionForItem(at: menu.index(of: item))
         #expect(fixture.captures.count == 1)
     }
 

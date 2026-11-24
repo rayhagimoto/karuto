@@ -11,7 +11,9 @@ struct CaptureSessionPreferencesTests {
         let settings = AppSettings(defaults: defaults)
         let first = CaptureUIController(settings: settings)
         #expect(first.delaySeconds == 0)
+        first.setRegion(.fullscreen)
         first.setRegion(.scrolling)
+        #expect(first.selectedRegion == .scrolling)
         first.setMode(.screenRecording)
         #expect(first.delaySeconds == 0)
         #expect(first.selectedRegion == .area)
@@ -25,7 +27,7 @@ struct CaptureSessionPreferencesTests {
         let reopened = CaptureUIController(settings: AppSettings(defaults: defaults))
         #expect(reopened.mode == .snapshot)
         #expect(reopened.delaySeconds == 0)
-        #expect(reopened.selectedRegion == .scrolling)
+        #expect(reopened.selectedRegion == .fullscreen)
         #expect(!reopened.instantCapture)
         reopened.handleShortcut(.recordingMode)
         #expect(reopened.delaySeconds == 3)
@@ -35,7 +37,22 @@ struct CaptureSessionPreferencesTests {
         #expect(reopened.delaySeconds == 0)
         reopened.handleShortcut(.snapshotMode)
         #expect(reopened.delaySeconds == 0)
-        #expect(reopened.selectedRegion == .scrolling)
+        #expect(reopened.selectedRegion == .fullscreen)
+    }
+
+    @Test func legacyScrollingRegionFallsBackToAreaAndNewScrollingSessionsKeepTheirOtherOptions() throws {
+        let name = "KarutoTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("scrolling", forKey: "capture.snapshot.region")
+        let ui = CaptureUIController(settings: AppSettings(defaults: defaults))
+        #expect(ui.selectedRegion == .area)
+        ui.loadPreferences(region: .scrolling)
+        ui.setDelay(3)
+        #expect(ui.selectedRegion == .scrolling)
+        ui.loadPreferences()
+        #expect(ui.selectedRegion == .area)
+        #expect(ui.delaySeconds == 3)
     }
 
     @Test func snapshotKeepsExistingSelectionDefaults() throws {

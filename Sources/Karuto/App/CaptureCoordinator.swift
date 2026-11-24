@@ -62,7 +62,8 @@ final class CaptureCoordinator {
         captureUI.onSelectionSourceChange = { [weak self] previousMode in
             guard let self, phase == .selecting else { return }
             // Acquire the new source with the selection windows out of the way.
-            cancel { [weak self] in self?.beginSelection(previousMode: previousMode) }
+            let focus = captureUI.focusedToolbarLabel
+            cancel { [weak self] in self?.beginSelection(previousMode: previousMode, restoringFocus: focus) }
         }
         captureUI.onOpenPreferences = { [weak self] in self?.showSettings() }
         captureUI.onOpenKeymap = { [weak self] in self?.showKeymap() }
@@ -83,15 +84,14 @@ final class CaptureCoordinator {
         engine.onFailure = { [weak self] error in self?.streamFailed(error) }
     }
 
-    func openToolbar(initialRegion: CaptureRegion? = nil) {
+    func openToolbar(initialMode: CaptureMode = .snapshot, initialRegion: CaptureRegion? = nil) {
         guard phase == .idle else { return }
         captureUI.ocrEnabled = false
-        captureUI.loadPreferences()
-        if let initialRegion { captureUI.setRegion(initialRegion) }
+        captureUI.loadPreferences(mode: initialMode, region: initialRegion)
         beginSelection()
     }
 
-    private func beginSelection(previousMode: CaptureMode? = nil) {
+    private func beginSelection(previousMode: CaptureMode? = nil, restoringFocus: String? = nil) {
         guard phase == .idle else { return }
         let freeze = captureUI.usesFrozenSelection
         let id = UUID(); operationID = id; phase = .selecting
@@ -112,7 +112,7 @@ final class CaptureCoordinator {
                 guard !catalog.displays.isEmpty else { throw CaptureError.targetMissing }
                 frozenDesktop = frozen
                 self.catalog = catalog; phase = .selecting
-                captureUI.present(catalog: catalog, frozenFrames: frozen?.frames ?? [:], previousMode: previousMode)
+                captureUI.present(catalog: catalog, frozenFrames: frozen?.frames ?? [:], previousMode: previousMode, restoringFocus: restoringFocus)
             } catch { fail(error, id: id) }
         }
     }

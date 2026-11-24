@@ -4,6 +4,41 @@ import Testing
 
 @MainActor
 struct KeymapTests {
+    @Test func directOpenShortcutsAreUnassignedAndLaunchTheirRequestedSelection() throws {
+        let fixture = Fixture()
+        let controller = KeymapController(settings: fixture.settings, global: GlobalShortcut(backend: fixture.backend))
+        let ui = CaptureUIController(settings: fixture.settings)
+        ui.loadPreferences(mode: .screenRecording, region: .window)
+        let launches: [(ShortcutAction, CaptureMode, CaptureRegion)] = [
+            (.openAreaCapture, .snapshot, .area), (.openWindowCapture, .snapshot, .window),
+            (.openFullscreenCapture, .snapshot, .fullscreen), (.openScrollingCapture, .snapshot, .scrolling),
+            (.openScreenRecording, .screenRecording, .window)
+        ]
+        try controller.start()
+        defer { controller.shutdown() }
+        var dispatched: ShortcutAction?
+        controller.onAction = { action in
+            dispatched = action
+            if let launch = action.overlayLaunch { ui.loadPreferences(mode: launch.mode, region: launch.region) }
+        }
+        for (index, launch) in launches.enumerated() {
+            let (action, mode, region) = launch
+            #expect(action.scope == .global)
+            #expect(controller.configuration.binding(for: action) == nil)
+            let binding = ShortcutBinding(keyCode: UInt16(index), modifiers: [.command, .option])
+            try controller.update(action: action, binding: binding)
+            let id = try #require(fixture.backend.bindings.first { $0.value == binding }?.key)
+            fixture.backend.onPress?(id)
+            #expect(dispatched == action)
+            #expect(ui.mode == mode)
+            #expect(ui.selectedRegion == region)
+            #expect(fixture.settings.keymap.binding(for: action) == binding)
+        }
+        ui.loadPreferences()
+        #expect(ui.mode == .snapshot)
+        #expect(ui.selectedRegion == .fullscreen)
+    }
+
     @Test func defaultsUnassignmentAndNewActionsSurviveRoundTrip() throws {
         let defaults = KeymapConfiguration()
         #expect(defaults.binding(for: .preferences) == ShortcutBinding(keyCode: 43, modifiers: .command))
@@ -44,6 +79,18 @@ struct KeymapTests {
         let reopened = AppSettings(defaults: fixture.defaults).keymap
         #expect(reopened.binding(for: .copyScreenshot) == replacement)
         #expect(reopened.binding(for: .saveScreenshot) == nil)
+    }
+
+    @Test func OCRDefaultPreservesCustomAndClearedShortcuts() throws {
+        let fixture = Fixture()
+        let o = ShortcutBinding(keyCode: 31, modifiers: [])
+        #expect(fixture.settings.keymap.binding(for: .toggleOCR) == o)
+        let existing = KeymapConfiguration().setting(o, for: .windowMode)
+        fixture.defaults.set(try JSONEncoder().encode(existing), forKey: "keymap.v1")
+        #expect(fixture.settings.keymap.binding(for: .windowMode) == o)
+        #expect(fixture.settings.keymap.binding(for: .toggleOCR) == nil)
+        fixture.settings.keymap = KeymapConfiguration().setting(nil, for: .toggleOCR)
+        #expect(fixture.settings.keymap.binding(for: .toggleOCR) == nil)
     }
 
     @Test func duplicateAcrossScopesAndUnsafeGlobalBindingAreRejected() throws {

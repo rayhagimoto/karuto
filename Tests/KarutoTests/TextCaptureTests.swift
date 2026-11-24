@@ -171,24 +171,29 @@ struct TextCaptureTests {
         #expect(copies == 0)
     }
 
-    @Test func OCRToolbarIconAndLabelDoNotOverlap() throws {
+    @Test func OCRToolbarKeepsItsPositionWithoutAConfirmationButton() throws {
         _ = NSApplication.shared
         let ui = CaptureUIController()
         let display = CaptureDisplay(id: 41, name: "Test", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2)
         ui.present(catalog: CaptureCatalog(displays: [display], windows: []))
         defer { ui.dismiss() }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        let button = try #require(NSApp.windows.compactMap(\.contentView).flatMap(descendants).compactMap { $0 as? NSButton }.first { $0.title == "OCR Off" })
-        button.window?.orderOut(nil)
-        for enabled in [false, true] {
+        let buttons = NSApp.windows.filter(\.isVisible).compactMap(\.contentView).filter { $0 is CaptureToolbarView }
+            .flatMap(descendants).compactMap { $0 as? CaptureToolbarButton }
+        let button = try #require(buttons.first { $0.accessibilityLabel() == "Recognize text" })
+        button.window?.contentView?.layoutSubtreeIfNeeded()
+        let frame = button.convert(button.bounds, to: nil)
+        for enabled in [true, false] {
             ui.ocrEnabled = enabled
             button.window?.contentView?.layoutSubtreeIfNeeded()
-            let cell = try #require(button.cell as? NSButtonCell)
-            let imageRect = cell.imageRect(forBounds: button.bounds)
-            let textRect = cell.titleRect(forBounds: button.bounds)
-            #expect(button.imagePosition == .imageLeading)
-            #expect(!imageRect.intersects(textRect))
+            #expect(button.symbolName == "text.viewfinder")
+            #expect(button.state == (enabled ? .on : .off))
+            #expect(!buttons.contains { ["Capture", "Copy All Text", "Continue"].contains($0.accessibilityLabel() ?? "") })
+            #expect(button.convert(button.bounds, to: nil) == frame)
         }
+        ui.setRegion(.scrolling)
+        #expect(!button.isEnabled)
+        #expect(!button.isHidden)
     }
 
     @Test func OCRIsIndependentOfTargetAndUnavailableForOtherModes() {

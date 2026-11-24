@@ -8,6 +8,7 @@ final class SelectionSizeControl: NSStackView, NSTextFieldDelegate {
     private let heightField = NSTextField()
     private var selectionSize = CGSize.zero
     var onResize: ((CGSize) -> Void)?
+    var onLeaveFields: ((Bool) -> Void)?
 
     init() {
         super.init(frame: CGRect(origin: .zero, size: Self.size))
@@ -77,6 +78,12 @@ final class SelectionSizeControl: NSStackView, NSTextFieldDelegate {
         case #selector(NSResponder.cancelOperation(_:)):
             let value = control === widthField ? selectionSize.width : selectionSize.height
             textView.string = String(Int(value.rounded()))
+        case #selector(NSResponder.insertTab(_:)) where control === heightField,
+             #selector(NSResponder.insertBacktab(_:)) where control === widthField:
+            let backwards = control === widthField
+            endEditing()
+            onLeaveFields?(backwards)
+            return true
         case #selector(NSResponder.insertNewline(_:)): break
         default: return false
         }

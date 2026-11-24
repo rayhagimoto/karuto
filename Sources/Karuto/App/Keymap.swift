@@ -5,7 +5,8 @@ import Carbon
 enum ShortcutScope: String, Codable, Sendable { case global, application, overlay }
 
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
-    case openCapture, previousArea, restoreCapture, stopCapture
+    case openCapture, openAreaCapture, openWindowCapture, openFullscreenCapture, openScrollingCapture, openScreenRecording
+    case previousArea, restoreCapture, stopCapture
     case preferences, keymap, closePreferences, quit
     case confirmCapture, cancelCapture, toggleInstantCapture, toggleFreezeDisplay, toggleOCR
     case copyScreenshot, saveScreenshot
@@ -13,9 +14,21 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     case snapshotMode
     case selectLastArea, undoAnnotation, redoAnnotation
 
-    var scope: ShortcutScope {
+    var overlayLaunch: (mode: CaptureMode, region: CaptureRegion?)? {
         switch self {
-        case .openCapture, .previousArea, .restoreCapture, .stopCapture: .global
+        case .openCapture: (.snapshot, nil)
+        case .openAreaCapture: (.snapshot, .area)
+        case .openWindowCapture: (.snapshot, .window)
+        case .openFullscreenCapture: (.snapshot, .fullscreen)
+        case .openScrollingCapture: (.snapshot, .scrolling)
+        case .openScreenRecording: (.screenRecording, nil)
+        default: nil
+        }
+    }
+    var scope: ShortcutScope {
+        if overlayLaunch != nil { return .global }
+        return switch self {
+        case .previousArea, .restoreCapture, .stopCapture: .global
         case .preferences, .keymap, .closePreferences, .quit: .application
         default: .overlay
         }
@@ -30,6 +43,11 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var title: String {
         switch self {
         case .openCapture: "Open capture toolbar"
+        case .openAreaCapture: "Open area capture"
+        case .openWindowCapture: "Open window capture"
+        case .openFullscreenCapture: "Open fullscreen capture"
+        case .openScrollingCapture: "Open scrolling capture"
+        case .openScreenRecording: "Open screen recording"
         case .previousArea: "Capture previous area"
         case .restoreCapture: "Restore last capture"
         case .stopCapture: "Stop capture"
@@ -64,6 +82,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .keymap: ShortcutBinding(keyCode: 43, modifiers: [.command, .option])
         case .quit: ShortcutBinding(keyCode: 12, modifiers: .command)
         case .confirmCapture: ShortcutBinding(keyCode: 36, modifiers: [])
+        case .toggleOCR: ShortcutBinding(keyCode: UInt16(kVK_ANSI_O), modifiers: [])
         case .copyScreenshot: ShortcutBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: .command)
         case .saveScreenshot: ShortcutBinding(keyCode: UInt16(kVK_ANSI_S), modifiers: .command)
         case .cancelCapture: ShortcutBinding(keyCode: 53, modifiers: [])
@@ -170,7 +189,7 @@ struct KeymapConfiguration: Codable, Equatable, Sendable {
     /// Existing custom shortcuts take precedence over newly introduced defaults.
     func adoptingEditorDefaults() -> Self {
         var result = self
-        for action in [ShortcutAction.selectLastArea, .undoAnnotation, .redoAnnotation, .copyScreenshot, .saveScreenshot]
+        for action in [ShortcutAction.selectLastArea, .undoAnnotation, .redoAnnotation, .copyScreenshot, .saveScreenshot, .toggleOCR]
             where assignments[action.rawValue] == nil && assignments.values.contains(where: { $0.binding == action.defaultBinding }) {
             result = result.setting(nil, for: action)
         }

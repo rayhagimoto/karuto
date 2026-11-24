@@ -56,11 +56,11 @@ final class CaptureUIController: NSObject {
     var capturesText: Bool { ocrEnabled && supportsOCR }
     private var supportsOCR: Bool { mode == .snapshot && region != .scrolling }
     private var confirmTitle: String {
-        if capturesText { return "Copy All" }
+        if capturesText { return "Copy All Text" }
         return mode == .screenRecording || region == .scrolling ? "Continue" : "Capture"
     }
-    private var ocrButton: CaptureActionButton?
-    private var annotateButton: CaptureActionButton?
+    private var ocrButton: CaptureToolbarButton?
+    private var annotateButton: CaptureToolbarButton?
     var selectedRegion: CaptureRegion { region }
     private var menuIsTracking = false
     private var pendingSourceChange = false
@@ -86,12 +86,13 @@ final class CaptureUIController: NSObject {
     private var toolbarHiddenForInk = false
     private var toolbarRevealTask: Task<Void, Never>?
     private var lastToolbarFrame: CGRect?
-    private var regionButtons: [CaptureRegion: CaptureModeButton] = [:]
+    private var regionButtons: [CaptureRegion: CaptureToolbarButton] = [:]
     private let sizeControl = SelectionSizeControl()
     private var modeControl: CaptureModeSelector?
-    private var timerControl: CaptureActionButton?
+    private var timerControl: CaptureToolbarButton?
     private var hint: NSTextField?
-    private var captureButton: ClosureButton?
+    private var focusGroups: [[CaptureToolbarButton]] = []
+    private var shortcutButtons: [ShortcutAction: CaptureToolbarButton] = [:]
     private var eventMonitor: Any?
     private var hoverArea: CGRect?
     private var windowLocked = false
@@ -101,6 +102,10 @@ final class CaptureUIController: NSObject {
     init(settings: AppSettings? = nil) {
         self.settings = settings
         super.init()
+        sizeControl.onLeaveFields = { [weak self] backwards in
+            guard let self else { return }
+            focusGroup(backwards ? focusGroups.count - 1 : 0)
+        }
         editor.onConfirm = { [weak self] in self?.confirm() }
         editor.presentMenu = { [weak self] menu, button in self?.showMenu(menu, from: button) }
         editor.onSelectTool = { [weak self] tool in
@@ -117,12 +122,14 @@ final class CaptureUIController: NSObject {
         loadPreferences()
     }
 
-    func loadPreferences() {
-        mode = .snapshot
-        guard let settings else { return }
-        for mode in CaptureMode.allCases {
-            savedPreferences[mode] = settings.capturePreferences(for: mode)
+    func loadPreferences(mode initialMode: CaptureMode = .snapshot, region initialRegion: CaptureRegion? = nil) {
+        mode = initialMode
+        if let settings {
+            for mode in CaptureMode.allCases {
+                savedPreferences[mode] = settings.capturePreferences(for: mode)
+            }
         }
+        if let initialRegion, mode.supports(initialRegion) { preferences.region = initialRegion }
     }
 
     isolated deinit {
@@ -131,8 +138,13 @@ final class CaptureUIController: NSObject {
         NotificationCenter.default.removeObserver(self)
     }
 
+    var focusedToolbarLabel: String? {
+        guard toolbar?.isKeyWindow == true else { return nil }
+        return (toolbar?.firstResponder as? CaptureToolbarButton)?.accessibilityLabel()
+    }
+
     func present(catalog: CaptureCatalog, initialRegion: CaptureRegion? = nil, frozenFrames: [UInt32: CGImage] = [:],
-                 previousMode: CaptureMode? = nil) {
+                 previousMode: CaptureMode? = nil, restoringFocus label: String? = nil) {
         dismiss()
         self.catalog = catalog
         if let initialRegion, mode.supports(initialRegion) { preferences.region = initialRegion }
@@ -187,7 +199,10 @@ final class CaptureUIController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         toolbar?.makeKeyAndOrderFront(nil)
         resetSelection()
-        toolbar?.makeFirstResponder(toolbar?.contentView)
+        let restored = label.flatMap { name in
+            focusGroups.joined().first { $0.isEnabled && $0.accessibilityLabel() == name }
+        }
+        toolbar?.makeFirstResponder(restored ?? toolbar?.contentView)
         refreshCursor(at: NSEvent.mouseLocation)
     }
 
@@ -246,11 +261,12 @@ final class CaptureUIController: NSObject {
         overlays.forEach { $0.cancelInteraction(); $0.releaseFrozenFrame(); $0.controller = nil }
         overlays.removeAll()
         regionButtons.removeAll()
+        focusGroups.removeAll()
+        shortcutButtons.removeAll()
         modeControl = nil
         timerControl = nil
         annotateButton = nil
         ocrButton = nil
-        captureButton = nil
         hint = nil
         NSCursor.arrow.set()
     }
@@ -498,6 +514,7 @@ final class CaptureUIController: NSObject {
         for (buttonRegion, button) in regionButtons {
             button.isEnabled = mode.supports(buttonRegion)
             button.state = buttonRegion == region ? .on : .off
+            button.setAccessibilityValue(buttonRegion == region ? 1 : 0)
             button.needsDisplay = true
         }
         updateModeControls()
@@ -513,10 +530,9 @@ final class CaptureUIController: NSObject {
     private func updateModeControls() {
         if let index = CaptureMode.allCases.firstIndex(of: mode) { modeControl?.select(index) }
         let timerStatus = delaySeconds == 0 ? "Off" : timerTitle(for: delaySeconds)
-        timerControl?.image = NSImage(systemSymbolName: delaySeconds == 0 ? "clock" : "clock.fill",
-                                      accessibilityDescription: nil)
+        timerControl?.symbolName = delaySeconds == 0 ? "clock" : "clock.fill"
         timerControl?.setAccessibilityValue(timerStatus)
-        timerControl?.toolTip = "Capture timer: \(timerStatus)"
+        timerControl?.focusHint = "Capture timer: \(timerStatus)"
     }
 
     fileprivate func refreshSelection() {
@@ -621,17 +637,15 @@ final class CaptureUIController: NSObject {
     }
 
     private func updateToolbar() {
-        annotateButton?.isHidden = !(mode == .snapshot && region == .area && instantCapture && !capturesText)
+        annotateButton?.isEnabled = (mode == .snapshot && region == .area && instantCapture && !capturesText)
         annotateButton?.state = stageAreaForEditing ? .on : .off
         ocrButton?.isEnabled = supportsOCR
         ocrButton?.state = capturesText ? .on : .off
-        let shortcut = keymap?.configuration.binding(for: .toggleOCR).map { " · \($0.displayString)" } ?? ""
-        ocrButton?.title = "OCR " + (capturesText ? "On" : "Off") + shortcut
-        ocrButton?.toolTip = supportsOCR ? "Double-click a word to copy it, or drag over text and press ⌘C." : "OCR is available for Area, Fullscreen, and Window snapshots."
-        captureButton?.title = confirmTitle
-        let enabled = capturesText ? canCopyAll : target != nil
-        if captureButton?.isEnabled != enabled { captureButton?.isEnabled = enabled }
-        let confirmation = keymap?.configuration.binding(for: .confirmCapture).map { "\($0.displayString) to \(confirmTitle.lowercased())" } ?? "Click \(confirmTitle)"
+        ocrButton?.focusHint = supportsOCR
+            ? shortcutLabel("Recognize text", action: .toggleOCR)
+            : "Recognize text is available for Area, Fullscreen, and Window snapshots."
+        let confirmation = keymap?.configuration.binding(for: .confirmCapture).map { "\($0.displayString) to \(confirmTitle.lowercased())" }
+            ?? "Choose \(confirmTitle) in Capture options"
         var shortcuts: [String] = []
         if canChooseSnapshotDestination, let keymap {
             for (action, label) in [(ShortcutAction.copyScreenshot, "Copy"), (.saveScreenshot, "Save")] {
@@ -640,10 +654,11 @@ final class CaptureUIController: NSObject {
                 }
             }
         }
-        captureButton?.toolTip = ([confirmation] + shortcuts).joined(separator: " · ")
-        let stagedHint = shortcuts.isEmpty ? confirmation : shortcuts.joined(separator: " · ")
-        let message = capturesText ? textHint : region == .area && captureOnRelease ? "Drag to capture" : enabled ? stagedHint : selectingWindow ? "Choose a window" : selectingDisplay ? "Choose a display" : "Drag to select"
-        if hint?.stringValue != message { hint?.stringValue = message; hint?.toolTip = message }
+        let stagedHint = ([confirmation] + shortcuts).joined(separator: " · ")
+        let message = capturesText ? textHint : region == .area && captureOnRelease ? "Drag to capture" : target != nil ? stagedHint : selectingWindow ? "Choose a window" : selectingDisplay ? "Choose a display" : "Drag to select"
+        let focused = toolbar?.firstResponder as? CaptureToolbarButton
+        let visibleHint = toolbar?.isKeyWindow == true ? focused?.focusHint ?? message : message
+        if hint?.stringValue != visibleHint { hint?.stringValue = visibleHint }
     }
 
     private func updateSizeControl() {
@@ -674,9 +689,9 @@ final class CaptureUIController: NSObject {
     }
 
     private func makeToolbar(on display: CaptureDisplay) {
-        let width: CGFloat = min(440, display.frame.width - 32)
-        let regionWidth = min(81, (width - 16) / 4)
-        let panel = CapturePanel(contentRect: CGRect(x: display.frame.midX - width / 2, y: display.frame.minY + 55, width: width, height: 156), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
+        let dividerPadding: CGFloat = 4
+        let width = min(449 + 6 * dividerPadding, display.frame.width - 16)
+        let panel = CapturePanel(contentRect: CGRect(x: display.frame.midX - width / 2, y: display.frame.minY + 55, width: width, height: 66), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
         let visibleFrame = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.id })?.visibleFrame ?? display.frame
         if let previous = lastToolbarFrame, display.frame.contains(CGPoint(x: previous.midX, y: previous.midY)) {
             panel.setFrame(ToolbarGeometry.clamped(CGRect(origin: previous.origin, size: panel.frame.size), to: visibleFrame), display: false)
@@ -688,123 +703,132 @@ final class CaptureUIController: NSObject {
         root.setAccessibilityElement(true)
         root.setAccessibilityRole(.group)
         root.setAccessibilityLabel("Karuto capture toolbar")
-        root.setAccessibilityHelp("Click a control to use it, or drag anywhere on the toolbar to move it.")
+        root.setAccessibilityHelp("Tab between groups. Use arrow keys within a group and Space to activate a control. Drag the toolbar to move it.")
         root.onMove = { [weak self] frame in
             self?.lastToolbarFrame = frame
             self?.updateSizeControl()
         }
         panel.contentView = root
         panel.initialFirstResponder = root
-        let vertical = NSStackView()
-        vertical.orientation = .vertical
-        vertical.alignment = .centerX
-        vertical.spacing = 10
-        pinSubview(vertical, to: root)
-        let mode = CaptureModeSelector(buttons: CaptureMode.allCases.map { captureMode in
-            CaptureActionButton(title: captureMode.title, symbol: captureMode == .snapshot ? "camera" : "record.circle") { [weak self] in
-                self?.setMode(captureMode)
+        let surface = SettingsGlassSurface()
+        pinSubview(surface, to: root)
+        let row = NSStackView()
+        row.spacing = 3
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+        surface.content.addSubview(row)
+
+        func divider() {
+            let line = NSBox()
+            line.boxType = .separator
+            let gap = row.spacing + dividerPadding
+            if let previous = row.arrangedSubviews.last {
+                row.setCustomSpacing(gap, after: previous)
             }
-        })
-        modeControl = mode
-        let timer = CaptureActionButton(title: "", symbol: "clock")
-        timer.setAccessibilityLabel("Capture timer")
-        timer.setAccessibilityHelp("Choose the delay after confirming capture. Saved separately for each capture mode.")
+            row.addArrangedSubview(line)
+            row.setCustomSpacing(gap, after: line)
+            line.widthAnchor.constraint(equalToConstant: 1).isActive = true
+            line.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        }
+        let modes = CaptureMode.allCases.map { mode in
+            let button = CaptureToolbarButton(mode.title, symbol: mode == .snapshot ? "camera" : "record.circle") { [weak self] in
+                self?.setMode(mode)
+            }
+            shortcutButtons[mode == .snapshot ? .snapshotMode : .recordingMode] = button
+            return button
+        }
+        let selector = CaptureModeSelector(buttons: modes)
+        modeControl = selector
+        row.addArrangedSubview(selector)
+        divider()
+        let regions: [(CaptureRegion, String, ShortcutAction)] = [
+            (.area, "viewfinder", .areaMode), (.fullscreen, "display", .fullscreenMode),
+            (.window, "macwindow", .windowMode), (.scrolling, "computermouse", .scrollingMode)
+        ]
+        let choices = regions.map { region, symbol, action in
+            let button = CaptureToolbarButton(region.title, symbol: symbol) { [weak self] in self?.setRegion(region) }
+            button.setAccessibilityRole(.radioButton)
+            row.addArrangedSubview(button)
+            regionButtons[region] = button
+            shortcutButtons[action] = button
+            return button
+        }
+        divider()
+        let ocr = CaptureToolbarButton("Recognize text", symbol: "text.viewfinder", checked: true) { [weak self] in
+            self?.handleShortcut(.toggleOCR)
+        }
+        ocrButton = ocr
+        let timer = CaptureToolbarButton("Capture timer", symbol: "clock")
         timer.handler = { [weak self, weak timer] in
             guard let self, let timer else { return }
             showMenu(makeTimerMenu(), from: timer)
         }
         timerControl = timer
-        let annotate = CaptureActionButton(title: "Annotate", symbol: "pencil") { [weak self] in
+        let annotate = CaptureToolbarButton("Annotate", symbol: "pencil", checked: true) { [weak self] in
             guard let self else { return }
             stageAreaForEditing.toggle()
-            refreshKeymap()
+            refreshSelection()
         }
-        annotate.toolTip = "Keep this area open for annotation after dragging."
+        annotate.focusHint = "Keep this area open for annotation after dragging."
         annotateButton = annotate
-        let captureOptions = NSStackView(views: [mode, timer, annotate])
-        captureOptions.alignment = .centerY
-        captureOptions.spacing = 6
-        let optionsSurface = CaptureSurface()
-        optionsSurface.cornerRadius = 11
-        pinSubview(captureOptions, to: optionsSurface.contentView, inset: 4)
-        optionsSurface.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        vertical.addArrangedSubview(optionsSurface)
-        let modesSurface = CaptureSurface()
-        let modes = NSStackView()
-        modes.spacing = 2
-        pinSubview(modes, to: modesSurface.contentView, inset: 5)
-        let symbols: [CaptureRegion: String] = [.area: "viewfinder", .fullscreen: "display", .window: "macwindow", .scrolling: "arrow.down"]
-        for region in CaptureRegion.allCases {
-            let button = CaptureModeButton(title: region.title, symbol: symbols[region]) { [weak self] in self?.setRegion(region) }
-            button.imagePosition = .imageAbove
-            button.font = .systemFont(ofSize: 13, weight: .regular)
-            button.imageScaling = .scaleProportionallyDown
-            button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
-            button.isBordered = false
-            button.focusRingType = .none
-            button.setButtonType(.toggle)
-            button.setAccessibilityHelp("Choose " + region.title.lowercased() + " capture region")
-            button.wantsLayer = true
-            button.widthAnchor.constraint(equalToConstant: regionWidth).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 54).isActive = true
-            modes.addArrangedSubview(button)
-            regionButtons[region] = button
-        }
-        vertical.addArrangedSubview(modesSurface)
-        let footer = CaptureSurface()
-        footer.cornerRadius = 11
-        let bottom = NSStackView()
-        bottom.spacing = 10
-        bottom.translatesAutoresizingMaskIntoConstraints = false
-        footer.contentView.addSubview(bottom)
-        NSLayoutConstraint.activate([
-            bottom.leadingAnchor.constraint(equalTo: footer.contentView.leadingAnchor, constant: 12),
-            bottom.trailingAnchor.constraint(equalTo: footer.contentView.trailingAnchor, constant: -12),
-            bottom.topAnchor.constraint(equalTo: footer.contentView.topAnchor, constant: 6),
-            bottom.bottomAnchor.constraint(equalTo: footer.contentView.bottomAnchor, constant: -6)
-        ])
-        let ocr = CaptureActionButton(title: "OCR Off", symbol: "text.viewfinder") { [weak self] in
-            self?.handleShortcut(.toggleOCR)
-        }
-        ocr.imagePosition = .imageLeading
-        ocr.imageScaling = .scaleProportionallyDown
-        ocr.setContentCompressionResistancePriority(.required, for: .horizontal)
-        ocr.setButtonType(.toggle)
-        ocr.setAccessibilityLabel("OCR: copy text in the preview")
-        bottom.addArrangedSubview(ocr)
-        ocrButton = ocr
-        let message = captureLabel("", size: 12, color: .secondaryLabelColor)
-        message.lineBreakMode = .byTruncatingTail
-        hint = message
-        bottom.addArrangedSubview(message)
-        let confirm = CaptureActionButton(title: "Capture") { [weak self] in self?.confirm() }
-        confirm.emphasized = true
-        captureButton = confirm
-        bottom.addArrangedSubview(confirm)
-        let cancel = CaptureActionButton(title: "Cancel") { [weak self] in self?.cancel() }
-        bottom.addArrangedSubview(cancel)
-        let options = CaptureActionButton(title: "", symbol: "gearshape")
-        options.setAccessibilityLabel("Capture options")
-        options.toolTip = "Instant capture and frozen display options"
+        let options = CaptureToolbarButton("Capture options", symbol: "gearshape")
         options.handler = { [weak self, weak options] in
             guard let self, let options else { return }
             showMenu(makeOptionsMenu(), from: options)
         }
-        bottom.addArrangedSubview(options)
-        vertical.addArrangedSubview(footer)
-        footer.widthAnchor.constraint(lessThanOrEqualTo: vertical.widthAnchor, constant: -20).isActive = true
-        footer.heightAnchor.constraint(equalToConstant: 38).isActive = true
-        message.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let tools = [ocr, timer, annotate, options]
+        tools.forEach { row.addArrangedSubview($0) }
+        divider()
+        let cancel = CaptureToolbarButton("Cancel", symbol: "xmark") { [weak self] in self?.cancel() }
+        row.addArrangedSubview(cancel)
+        shortcutButtons[.cancelCapture] = cancel
+        focusGroups = [modes, choices, tools, [cancel]]
+        let message = captureLabel("", size: 11)
+        message.alignment = .center
+        message.lineBreakMode = .byTruncatingTail
+        message.translatesAutoresizingMaskIntoConstraints = false
+        surface.content.addSubview(message)
+        hint = message
+        for button in focusGroups.joined() {
+            button.focusChanged = { [weak message, weak button] in
+                message?.stringValue = button?.focusHint ?? ""
+            }
+            if button !== cancel {
+                button.widthAnchor.constraint(equalTo: cancel.widthAnchor).isActive = true
+            }
+            button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: surface.content.leadingAnchor, constant: 10),
+            row.trailingAnchor.constraint(equalTo: surface.content.trailingAnchor, constant: -10),
+            row.topAnchor.constraint(equalTo: surface.content.topAnchor, constant: 7),
+            message.topAnchor.constraint(equalTo: row.bottomAnchor, constant: 4),
+            message.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            message.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+        ])
+        updateShortcutHints()
         toolbar = panel
     }
 
+    private func shortcutLabel(_ name: String, action: ShortcutAction) -> String {
+        guard let binding = keymap?.configuration.binding(for: action) else { return name }
+        return name + " · " + binding.displayString
+    }
+
+    private func updateShortcutHints() {
+        for (action, button) in shortcutButtons {
+            button.focusHint = shortcutLabel(button.accessibilityLabel() ?? action.title, action: action)
+        }
+    }
+
     func refreshKeymap() {
+        updateShortcutHints()
         overlays.forEach { updateAccessibilityHelp(for: $0) }
         refreshSelection()
     }
 
     private var confirmInstruction: String {
-        keymap?.configuration.binding(for: .confirmCapture).map { "press \($0.displayString)" } ?? "click \(confirmTitle)"
+        keymap?.configuration.binding(for: .confirmCapture).map { "press \($0.displayString)" } ?? "choose \(confirmTitle) in Capture options"
     }
 
     private var cancelInstruction: String {
@@ -827,15 +851,9 @@ final class CaptureUIController: NSObject {
               keymap?.isRecordingShortcut != true else { return false }
         if event.window === sizeControl.window, sizeControl.isEditing { return false }
         if editor.isTyping { return editor.handleTextKeyEvent(event) }
-        // Tab from the capture surface can reach the fields across the two windows.
-        if event.keyCode == 48, sizeControl.window != nil, !sizeControl.isHidden,
-           event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
-           let window = event.window, window === toolbar || window === sizeControl.window,
-           window.firstResponder === window || window.firstResponder === window.contentView || window.firstResponder is SelectionOverlayView,
-           keymap?.action(for: event, in: .overlay) == nil {
-            sizeControl.focus(backwards: event.modifierFlags.contains(.shift))
-            return true
-        }
+        if let field = event.window?.firstResponder as? NSTextView, field.isEditable { return false }
+        let action = keymap?.action(for: event, in: .overlay)
+        if action == nil, navigateToolbar(event) { return true }
         if capturesText, event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
            let preview = textPreview(for: event.window) {
             switch event.charactersIgnoringModifiers?.lowercased() {
@@ -849,8 +867,7 @@ final class CaptureUIController: NSObject {
             default: break
             }
         }
-        guard let keymap else { return false }
-        guard let action = keymap.action(for: event, in: .overlay) else { return false }
+        guard let action else { return false }
         if action == .copyScreenshot || action == .saveScreenshot {
             guard let window = event.window, !(window.firstResponder is NSTextView),
                   window === toolbar || editor.isPaletteWindow(window) || overlays.contains(where: { $0.window === window }) else {
@@ -858,6 +875,51 @@ final class CaptureUIController: NSObject {
             }
         }
         return handleShortcut(action)
+    }
+
+    private func focusGroup(_ index: Int) {
+        guard focusGroups.indices.contains(index) else { return }
+        let group = focusGroups[index].filter { $0.isEnabled }
+        let selected = group.first { $0.accessibilityRole() == .radioButton && ($0.accessibilityValue() as? Int) == 1 }
+        guard let button = selected ?? group.first else { return }
+        toolbar?.makeKey()
+        toolbar?.makeFirstResponder(button)
+    }
+
+    private func navigateToolbar(_ event: NSEvent) -> Bool {
+        guard let toolbar, let window = event.window, window === toolbar || overlayPanels.contains(where: { $0 === window }),
+              !toolbarHiddenForInk, !toolbar.ignoresMouseEvents else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let focused = window.firstResponder as? CaptureToolbarButton
+        let group = focusGroups.firstIndex { buttons in buttons.contains { $0 === focused } }
+        if event.keyCode == 48, modifiers.isEmpty || modifiers == [.shift] {
+            let backwards = modifiers.contains(.shift)
+            let stops = focusGroups.indices.filter { focusGroups[$0].contains { $0.isEnabled } }
+            guard let first = stops.first, let last = stops.last else { return false }
+            let position = group.flatMap { stops.firstIndex(of: $0) }
+            let next = position.map { $0 + (backwards ? -1 : 1) }
+            if let next, stops.indices.contains(next) {
+                focusGroup(stops[next])
+            } else if sizeControl.window != nil, !sizeControl.isHidden, next != nil || !backwards {
+                sizeControl.focus(backwards: backwards)
+            } else {
+                focusGroup(backwards ? last : first)
+            }
+            return true
+        }
+        guard modifiers.isEmpty, let focused, let group else { return false }
+        if event.keyCode == 49 {
+            if focused.isEnabled { focused.performClick(nil) }
+            return true
+        }
+        guard event.keyCode == 123 || event.keyCode == 124 else { return false }
+        let peers = focusGroups[group].filter { $0.isEnabled }
+        guard peers.count > 1, let index = peers.firstIndex(of: focused) else { return false }
+        let step = event.keyCode == 123 ? -1 : 1
+        let next = peers[(index + peers.count + step) % peers.count]
+        toolbar.makeFirstResponder(next)
+        if next.accessibilityRole() == .radioButton { next.performClick(nil) }
+        return true
     }
 
     /// Shared by event dispatch, menu actions, and offscreen interaction checks.
@@ -950,7 +1012,17 @@ final class CaptureUIController: NSObject {
             recall.target = self
             assignShortcut(.selectLastArea, to: recall)
         }
+        if capturesText ? canCopyAll : target != nil {
+            menu.addItem(.separator())
+            let item = menu.addItem(withTitle: confirmTitle, action: #selector(confirmFromMenu), keyEquivalent: "")
+            item.target = self
+        }
         return menu
+    }
+
+    @objc private func confirmFromMenu() {
+        if menuIsTracking { pendingNavigation = { [weak self] in self?.confirm() } }
+        else { confirm() }
     }
 
     @objc private func recallArea() {

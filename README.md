@@ -2,7 +2,7 @@
 
 # Karuto
 
-A lightweight, local-first capture utility for macOS. Capture screenshots, record your screen, and stitch scrolling content in browsers or Mac apps. Karuto uses a native Swift/AppKit interface, ScreenCaptureKit, and a small Rust stitching core. No browser extension or cloud account is required.
+A lightweight, local-first capture utility for macOS. Capture screenshots, record your screen, and stitch scrolling content in browsers or Mac apps. Karuto uses a native Swift interface with AppKit and SwiftUI, ScreenCaptureKit, and a small Rust stitching core. No browser extension or cloud account is required.
 
 **Alpha:** Karuto is under active development.
 
@@ -12,7 +12,13 @@ A lightweight, local-first capture utility for macOS. Capture screenshots, recor
 
 Press **Control–Shift–2** to open the toolbar. Capture a window or display, drag out an area, or click a suggested window outline. After you release the mouse, the selection shows its width and height in points. Click either value to resize precisely.
 
-![Karuto’s capture toolbar beneath an area selection, with the annotation palette above the rectangle and editable dimensions below it](docs/ui-evidence/area-selection.png)
+![Karuto’s icon-focused capture toolbar in light appearance](docs/ui-evidence/capture-toolbar-compact-light.png)
+
+The translucent toolbar groups Snapshot and Screen Recording, capture regions, and tools. Choose Area, Fullscreen, Window, or Scrolling with the region icons. The Scrolling icon shows a mouse with up and down arrows. The remaining icons toggle text recognition, choose a timer, stage an area for annotation, open capture options, and cancel. Selected modes use a subtle highlight, and enabled toggles show a checkmark. Hover over any icon to see its name.
+
+Use **Tab** and **Shift–Tab** to move between toolbar groups and available dimension fields. Use the **Left** and **Right** arrows to change a mode or region, or move between tools. Press **Space** to activate the focused control. The toolbar shows context and configured shortcut hints beneath the icons. Drag anywhere on the toolbar to reposition it.
+
+Press **Return** to confirm a selection. The gear menu also offers **Capture**, **Continue**, or **Copy All Text** when the corresponding action is available. Change or clear shortcuts in **Settings → Keyboard Shortcuts**.
 
 | In the Area overlay | Default shortcut |
 | --- | --- |
@@ -21,7 +27,7 @@ Press **Control–Shift–2** to open the toolbar. Capture a window or display, 
 | Capture using your usual save and clipboard preferences | **Return** |
 | Select the last captured rectangle for adjustment | **Command–R** |
 
-Copy and Save are available with Instant Capture off. Turn **Instant Capture** on to capture on mouse release, or click **Annotate** to keep one selection open for markup. Choose **Freeze Display** to select from a still frame. Snapshot and Screen Recording remember their own region and timer. **Capture Previous Area** can also be assigned a global shortcut to repeat a capture directly.
+Copy and Save are available with Instant Capture off. Turn **Instant Capture** on to capture on mouse release, or click the pencil **Annotate** icon to keep one selection open for markup. Choose **Freeze Display** to select from a still frame. Snapshot and Screen Recording remember their own region and timer. Scrolling is temporary. The next ordinary capture opens the last regular snapshot region, or Area by default. In **Settings → Keyboard Shortcuts**, assign shortcuts to open Area, Window, Fullscreen, Scrolling, or Screen Recording directly. **Capture Previous Area** can also be assigned a global shortcut to repeat a capture directly.
 
 ### Annotate before capture
 
@@ -31,13 +37,13 @@ Draw with the pen, highlighter, arrow, rectangle, or ellipse. Use numbered circl
 
 ### Copy text directly from the screen
 
-Switch on **OCR** to highlight recognizable text in an area, window, or display. Double-click a word to copy it, drag across a passage and press **Command–C**, or choose **Copy All**. The overlay stays open, so you can copy another passage without taking a screenshot. Requires a Mac with Live Text support.
+Press **O** or click the text-viewfinder icon to highlight recognizable text in an area, window, or display. A checkmark indicates that text recognition is on. Double-click a word to copy it, drag across a passage and press **Command–C**, or press **Return** to copy all recognized text. The overlay stays open, so you can copy another passage without taking a screenshot. Requires a Mac with Live Text support.
 
 ![Live Text highlighting route notes with “Alder Ridge” selected in the capture overlay](docs/ui-evidence/inline-ocr.png)
 
 ### Capture a scrolling page
 
-Choose **Scrolling**, select a pane in a browser or Mac app, and let Karuto scroll downward. You can move the pointer outside the pane during automatic capture. Keep its window visible and frontmost. It checks which content moves, outlines the verified region, and stitches overlapping frames into one PNG. Choose **Scroll Manually** to use your trackpad, mouse wheel, or Up and Down arrow keys. Scroll down to add content, then choose **Finish**. If Karuto can’t verify a single moving pane, choose **Adjust Area**. With macOS Accessibility access, Karuto directs arrow keys to the selected pane and paces fast wheel or trackpad input as frames arrive. Automatic scrolling and pane suggestions also use this access.
+Choose the mouse-and-arrows **Scrolling** icon, select a pane in a browser or Mac app, and let Karuto scroll downward. You can move the pointer outside the pane during automatic capture. Keep its window visible and frontmost. It checks which content moves, outlines the verified region, and stitches overlapping frames into one PNG. Choose **Scroll Manually** to use your trackpad, mouse wheel, or Up and Down arrow keys. Scroll down to add content, then choose **Finish**. If Karuto can’t verify a single moving pane, choose **Adjust Area**. With macOS Accessibility access, Karuto directs arrow keys to the selected pane and paces fast wheel or trackpad input as frames arrive. Automatic scrolling and pane suggestions also use this access.
 
 ![Scrolling capture showing the verified portion of a trail guide, the stitched height, and the Finish and Scroll Manually controls](docs/ui-evidence/scrolling-capture.png)
 
@@ -103,7 +109,7 @@ Open **Settings → Setup** for buttons to Screen & System Audio Recording, Acce
 ## Getting started
 
 1. Open the app; it stays in the menu bar. Use **Control–Shift–2** or choose **Open Capture Toolbar** from its menu bar menu. Drag anywhere on the toolbar to reposition it.
-2. Choose **Area**, then drag over the screen. Release to adjust or annotate the selection. For an exact size, click the width or height at the edge of the rectangle. Values are in points. **Tab** moves between the fields and **Return** applies the edit. Press **Return** outside the fields to capture. With Instant Capture enabled, click **Annotate** first to open the palette for this capture.
+2. Choose **Area**, then drag over the screen. Release to adjust or annotate the selection. For an exact size, click the width or height at the edge of the rectangle. Values are in points. **Tab** moves between the fields and **Return** applies the edit. Press **Return** outside the fields to capture. With Instant Capture enabled, click the pencil **Annotate** icon first to open the palette for this capture.
 3. Use the toolbar options menu to change Instant Capture or Freeze Display for the current session. Set defaults in Preferences.
 4. Open Preferences with **Command–comma**, or Keyboard Shortcuts with **Command–Option–comma**. These shortcuts are configurable. Press **Escape** to reset an active drag or an adjustable area selection; press it again with no selection to close capture. The on-screen Cancel button closes capture directly.
 
