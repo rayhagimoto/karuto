@@ -93,8 +93,9 @@ struct UICursorTests {
             slider.doubleValue = input
             #expect(slider.sendAction(slider.action, to: slider.target))
             #expect(slider.doubleValue == stop)
-            #expect(abs(scroll.magnification - exp2(stop)) < 0.00001)
-            #expect(abs(button.convert(button.bounds, to: nil).width - 26 * exp2(stop)) < 0.01)
+            #expect(scroll.magnification == 1)
+            #expect(abs(button.bounds.width - 26 * exp2(stop)) <= 1)
+            #expect(button.convert(button.bounds, to: nil).size == button.bounds.size)
             #expect(scroll.hasHorizontalScroller == (stop == 2))
             #expect(display.frame.contains(try #require(editor.visiblePaletteFrame)))
             #expect(settings.captureToolbarScale == 2)
@@ -105,7 +106,8 @@ struct UICursorTests {
         let (restored, restoredButton) = try open(reopened)
         #expect(restored.doubleValue == 0.5)
         let restoredScroll = try #require(restoredButton.enclosingScrollView)
-        #expect(abs(restoredScroll.magnification - sqrt(2)) < 0.00001)
+        #expect(restoredScroll.magnification == 1)
+        #expect(abs(restoredButton.bounds.width - 26 * sqrt(2)) <= 1)
     }
 
     @Test func toolbarModeButtonsAndTimerMenuStayInSync() throws {

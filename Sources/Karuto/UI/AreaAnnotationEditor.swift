@@ -36,6 +36,7 @@ final class AreaAnnotationEditor: NSObject {
     private var grid: CGImage?
     private var sampling: Task<Void, Never>?
     private var palette: CapturePanel?
+    private let paletteTools = NSStackView()
     private weak var paletteGrip: CaptureToolbarView?
     private let settings: AppSettings?
     private var paletteScale: Double
@@ -387,13 +388,11 @@ final class AreaAnnotationEditor: NSObject {
     private func makePalette() -> CapturePanel {
         let surface = CaptureSurface()
         surface.cornerRadius = 11
-        let stack = NSStackView()
-        stack.spacing = 3
         func button(_ label: String, _ symbol: String, _ action: @escaping () -> Void) -> CaptureActionButton {
             let b = CaptureActionButton(title: "", symbol: symbol, handler: action)
             b.setAccessibilityLabel(label)
             b.toolTip = label
-            stack.addArrangedSubview(b)
+            paletteTools.addArrangedSubview(b)
             return b
         }
         for tool in AnnotationTool.allCases {
@@ -407,12 +406,9 @@ final class AreaAnnotationEditor: NSObject {
         _ = button("Capture", "checkmark") { [weak self] in self?.onConfirm?() }
         let grip = CaptureToolbarView(frame: .zero)
         grip.onMove = { [weak self] _ in self?.movedPalette = true }
-        let width = CGFloat(stack.arrangedSubviews.count) * 29 + 9
-        let content = NSView(frame: CGRect(x: 0, y: 0, width: width, height: 38))
-        pinSubview(stack, to: content, inset: 6)
-        grip.installContent(content)
+        grip.installContent(paletteTools)
         pinSubview(grip, to: surface.contentView)
-        let panel = CapturePanel(contentRect: content.frame,
+        let panel = CapturePanel(contentRect: paletteTools.frame,
                                  level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 4))
         panel.contentMinSize = .zero
         panel.contentView = surface
@@ -457,8 +453,16 @@ final class AreaAnnotationEditor: NSObject {
     }
 
     private func resizePalette(within screen: CGRect) {
+        // Draw each symbol at its displayed point size, including on non-Retina screens.
+        for case let button as CaptureActionButton in paletteTools.arrangedSubviews {
+            button.iconScale = paletteScale
+        }
+        let inset = 6 * paletteScale
+        paletteTools.edgeInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        paletteTools.spacing = 3 * paletteScale
+        paletteTools.setFrameSize(paletteTools.fittingSize)
         (palette?.contentView as? CaptureSurface)?.cornerRadius = 11 * paletteScale
-        paletteGrip?.resize(to: paletteScale, within: screen)
+        paletteGrip?.resize(to: 1, within: screen)
     }
 
     private func positionPalette() {

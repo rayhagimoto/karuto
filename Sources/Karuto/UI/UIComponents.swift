@@ -300,9 +300,16 @@ final class CaptureModeSelector: NSStackView {
 final class CaptureActionButton: ClosureButton {
     var emphasized = false
     var showsBackground = true
+    var iconScale: CGFloat = 1 {
+        didSet {
+            guard iconScale != oldValue else { return }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize {
-        if title.isEmpty { return NSSize(width: 26, height: 26) }
+        if title.isEmpty { return NSSize(width: 26 * iconScale, height: 26 * iconScale) }
         let textWidth = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width
         return NSSize(width: ceil(textWidth) + 24 + (image == nil ? 0 : 20), height: 26)
     }
@@ -316,10 +323,11 @@ final class CaptureActionButton: ClosureButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = 7 * iconScale
         if showsBackground || isHighlighted {
             let fill: CGFloat = isHighlighted ? 0.22 : emphasized || state == .on ? 0.13 : 0.06
             NSColor.labelColor.withAlphaComponent(isEnabled ? fill : 0.03).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+            NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
         }
         let tint = (contentTintColor ?? .labelColor).withAlphaComponent(isEnabled ? 0.9 : 0.3)
         let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: tint]
@@ -327,9 +335,10 @@ final class CaptureActionButton: ClosureButton {
         let iconWidth: CGFloat = image == nil ? 0 : 20
         let contentX = (bounds.width - textSize.width - iconWidth) / 2
         if let image {
-            let size: CGFloat = 14
+            let size = 14 * iconScale
             let iconX = title.isEmpty ? bounds.midX - size / 2 : contentX
-            let configuration = NSImage.SymbolConfiguration(paletteColors: [tint])
+            let colors = NSImage.SymbolConfiguration(paletteColors: [tint])
+            let configuration = iconScale == 1 ? colors : NSImage.SymbolConfiguration(pointSize: size, weight: .regular).applying(colors)
             if let symbol = image.withSymbolConfiguration(configuration) {
                 let scale = size / max(symbol.size.width, symbol.size.height)
                 let width = symbol.size.width * scale
@@ -342,7 +351,7 @@ final class CaptureActionButton: ClosureButton {
         (title as NSString).draw(at: NSPoint(x: contentX + iconWidth, y: (bounds.height - textSize.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
             NSColor.labelColor.withAlphaComponent(0.25).setStroke()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).stroke()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius).stroke()
         }
     }
 }
