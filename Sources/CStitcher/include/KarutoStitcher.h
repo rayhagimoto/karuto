@@ -26,6 +26,8 @@ SXStitcher *sx_stitcher_create_calibrated(const char *directory, char *error, si
 typedef struct SXContentRect { uint32_t x, y, width, height; } SXContentRect;
 /* Top-left input pixel coordinates. Returns 1 verified, 0 pending, -1 invalid. */
 int32_t sx_stitcher_content_rect(SXStitcher *, SXContentRect *);
+/* Returns 1 when the verified capture excludes a floating bottom overlay. */
+int32_t sx_stitcher_excluded_bottom_overlay(SXStitcher *);
 /* Optional input-pixel pane bounds. Set before appending the first frame. */
 int32_t sx_stitcher_set_content_hint(SXStitcher *, SXContentRect);
 

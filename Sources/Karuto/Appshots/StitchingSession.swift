@@ -118,13 +118,13 @@ final class StitchingSession: @unchecked Sendable {
         let verified = detectScrollContent && sx_stitcher_content_rect(handle, &region) == 1
         calibrationRejected = detectScrollContent && progress.disposition == 2 && !verified
         let contentRect = verified ? CGRect(x: Int(region.x), y: Int(region.y), width: Int(region.width), height: Int(region.height)) : nil
-        if let contentRect {
+        if let contentRect, firstFrameHeight == nil {
             let bottom = hintBottom ?? frame.height
             let isFullWidth = Int(contentRect.width) >= frame.width - 4 && contentRect.minY <= 2
             // Static chrome outside a suggested pane is expected. A bottom
             // band inside the pane may cover rows the capture could not see.
-            excludedTail = (hintBottom != nil || isFullWidth) &&
-                bottom - Int(contentRect.maxY) > max(4, frame.height / 32)
+            excludedTail = sx_stitcher_excluded_bottom_overlay(handle) == 1 ||
+                ((hintBottom != nil || isFullWidth) && bottom - Int(contentRect.maxY) > max(4, frame.height / 32))
         }
         if progress.disposition == 2 { missedOverlap = true }
         if progress.disposition == 0 || progress.disposition == 5 { missedOverlap = false }

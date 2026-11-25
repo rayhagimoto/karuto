@@ -6,7 +6,7 @@ pub use calibration::ContentRect;
 
 use std::ffi::{CStr, c_char};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Mutex,
@@ -98,11 +98,41 @@ impl<'a> FrameView<'a> {
     fn row(&self, y: usize) -> &[u8] {
         &self.bytes[y * self.stride..y * self.stride + self.width * 4]
     }
-    fn shares_exact_rows(&self, next: &Self, shift: usize) -> bool {
+    fn blank_tail(&self) -> usize {
+        // Ignore compositor edges and scrollbars, but keep any real content.
+        let columns = 8..(self.width - 2) * 4;
+        let background = &self.row(self.height - 1)[8..12];
+        (0..self.height)
+            .rev()
+            .take_while(|&y| {
+                self.row(y)[columns.clone()]
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == background)
+            })
+            .count()
+    }
+    fn shares_exact_rows(&self, next: &Self, shift: usize, pinned_header: bool) -> bool {
         // Leave the outer two pixels free for a scrollbar or compositor edge.
         let columns = 8..(self.width - 2) * 4;
-        (0..self.height - shift)
-            .all(|y| self.row(y + shift)[columns.clone()] == next.row(y)[columns.clone()])
+        let overlap = self.height - shift;
+        let Some(last_difference) = (0..overlap)
+            .rfind(|&y| self.row(y + shift)[columns.clone()] != next.row(y)[columns.clone()])
+        else {
+            return true;
+        };
+        // After an interruption, require a substantial exact body. Any
+        // difference above it must be a pixel that stayed fixed in the viewport.
+        pinned_header
+            && last_difference < self.height / 3
+            && overlap - last_difference - 1 >= (self.height / 3).max(24)
+            && (0..=last_difference).all(|y| {
+                let stationary = self.row(y)[columns.clone()].chunks_exact(4);
+                let shifted = self.row(y + shift)[columns.clone()].chunks_exact(4);
+                let current = next.row(y)[columns.clone()].chunks_exact(4);
+                current
+                    .zip(shifted.zip(stationary))
+                    .all(|(pixel, (moving, fixed))| pixel == moving || pixel == fixed)
+            })
     }
     fn below(&self, rows: usize) -> Self {
         Self {
@@ -352,11 +382,70 @@ fn matching_displacement(
     pixel_match(previous, next, candidate, repaint).then_some(candidate)
 }
 
+/// Verify alignment before any blank rows that may still be awaiting content.
+fn displacement_before_blank_tail(
+    previous: &Frame,
+    next: &FrameView<'_>,
+    signature: &[u8],
+    blank: usize,
+    reconnecting: bool,
+) -> Option<usize> {
+    let height = previous.height - blank;
+    let min_overlap = (previous.height / 4).max(height / 3).max(24);
+    if blank < 24 || height <= min_overlap {
+        return None;
+    }
+    let a = FrameView {
+        height,
+        ..previous.view()
+    };
+    let b = FrameView { height, ..*next };
+    let shift = matching_displacement(
+        &a,
+        &previous.signature[..height * 32],
+        &b,
+        &signature[..height * 32],
+        min_overlap,
+        false,
+    )?;
+    // Only use the shortened proof when that blank overlap now contains ink.
+    let overlap = FrameView {
+        height: next.height - shift,
+        ..*next
+    };
+    (overlap.blank_tail() < blank && (!reconnecting || a.shares_exact_rows(&b, shift, false)))
+        .then_some(shift)
+}
+
+/// A later render can fill the provisional tail without moving the viewport.
+fn fills_blank_tail_at_rest(
+    previous: &Frame,
+    next: &FrameView<'_>,
+    signature: &[u8],
+    blank: usize,
+    reconnecting: bool,
+) -> bool {
+    let height = previous.height - blank;
+    if blank < 24 || height < previous.height / 2 {
+        return false;
+    }
+    let a = FrameView {
+        height,
+        ..previous.view()
+    };
+    let b = FrameView { height, ..*next };
+    signature_error(&previous.signature, signature, 0, height, false) <= 0.5
+        && pixel_match(&a, &b, 0, false)
+        && (!reconnecting || a.shares_exact_rows(&b, 0, false))
+        && next.blank_tail() < blank
+}
+
 pub struct Session {
     file: File,
     scratch: PathBuf,
     previous: Option<Frame>,
     height: usize,
+    pending_blank_rows: usize,
     started: Instant,
     finished: bool,
     failed: bool,
@@ -381,6 +470,7 @@ impl Session {
             scratch,
             previous: None,
             height: 0,
+            pending_blank_rows: 0,
             started: Instant::now(),
             finished: false,
             failed: false,
@@ -410,8 +500,8 @@ impl Session {
             return Ok(self.progress(3));
         }
         let signature = view.signature();
-        let added = match &self.previous {
-            None => height,
+        let (added, backfill) = match &self.previous {
+            None => (height, false),
             Some(previous) => {
                 if width != previous.width || height != previous.height {
                     return Err(
@@ -420,22 +510,47 @@ impl Session {
                 }
                 let baseline = previous.view();
                 if signature_error(&previous.signature, &signature, 0, height, false) <= 0.5 {
-                    if self.rejected_overlap && baseline.shares_exact_rows(&view, 0) {
+                    if self.rejected_overlap && baseline.shares_exact_rows(&view, 0, false) {
                         self.rejected_overlap = false;
                         return Ok(self.progress(5));
                     }
                     return Ok(self.progress(1));
                 }
+                if fills_blank_tail_at_rest(
+                    previous,
+                    &view,
+                    &signature,
+                    self.pending_blank_rows,
+                    self.rejected_overlap,
+                ) {
+                    // Preserve the anchor until forward motion can place the
+                    // newly visible pixels in the stitched document.
+                    let disposition = if self.rejected_overlap { 5 } else { 1 };
+                    self.rejected_overlap = false;
+                    return Ok(self.progress(disposition));
+                }
                 // After a gap, coincidentally similar rows must not reconnect
                 // the capture. Require exact overlap or return to its last view.
-                let options = if self.rejected_overlap {
-                    MatchOptions::STRICT
-                } else {
-                    self.match_options
-                };
-                let matched = displacement(previous, &view, &signature, options).filter(|&shift| {
-                    !self.rejected_overlap || baseline.shares_exact_rows(&view, shift)
-                });
+                let mut options = self.match_options;
+                if self.rejected_overlap {
+                    options.repaint = false;
+                }
+                let matched = displacement(previous, &view, &signature, options)
+                    .filter(|&shift| {
+                        !self.rejected_overlap
+                            || baseline.shares_exact_rows(&view, shift, options.top_overlay)
+                    })
+                    .map(|shift| (shift, false))
+                    .or_else(|| {
+                        displacement_before_blank_tail(
+                            previous,
+                            &view,
+                            &signature,
+                            self.pending_blank_rows,
+                            self.rejected_overlap,
+                        )
+                        .map(|shift| (shift, true))
+                    });
                 match matched {
                     Some(delta) => delta,
                     None => {
@@ -455,14 +570,41 @@ impl Session {
         {
             return Ok(self.progress(3));
         }
-        // Copy into the retained tight frame once, then append its new rows in
-        // one write instead of making a system call for every scanline.
+        // Keep the unpopulated tail in the retained viewport until a later view
+        // either fills it in or moves it out of sight. The file is append-only.
         let replacement = Frame::from_view(&view, signature);
-        let old_bytes = self.height as u64 * width as u64 * 4;
-        if let Err(e) = self
-            .file
-            .write_all(&replacement.pixels[(height - added) * width * 4..])
-        {
+        let row_bytes = width * 4;
+        let mut replaceable = self.pending_blank_rows.min(height - added);
+        if !backfill && let Some(previous) = &self.previous {
+            let baseline = previous.view();
+            // With ordinary alignment, carry forward identical blank rows and
+            // keep the original pixels wherever the two views differ.
+            replaceable = (height - replaceable..height)
+                .rev()
+                .take_while(|&y| baseline.row(y) == view.row(y - added))
+                .count();
+        }
+        let pending = if self.match_options.repaint {
+            view.blank_tail().min(added + replaceable)
+        } else {
+            0
+        };
+        let old_bytes = ((self.height - self.pending_blank_rows) * row_bytes) as u64;
+        let written = (|| -> std::io::Result<()> {
+            self.file.seek(SeekFrom::Start(old_bytes))?;
+            if self.pending_blank_rows > replaceable {
+                let previous = self.previous.as_ref().unwrap();
+                self.file.write_all(
+                    &previous.pixels[(height - self.pending_blank_rows) * row_bytes
+                        ..(height - replaceable) * row_bytes],
+                )?;
+            }
+            self.file.write_all(
+                &replacement.pixels
+                    [(height - added - replaceable) * row_bytes..(height - pending) * row_bytes],
+            )
+        })();
+        if let Err(e) = written {
             let _ = self.file.set_len(old_bytes);
             let _ = self.file.seek(SeekFrom::End(0));
             self.failed = true;
@@ -471,17 +613,18 @@ impl Session {
         self.previous = Some(replacement);
         self.rejected_overlap = false;
         self.height = new_height;
+        self.pending_blank_rows = pending;
         Ok(self.progress(0))
     }
     pub fn finish(&mut self, destination: &Path) -> Result<Progress> {
         if self.finished {
             return Err("The scrolling capture is no longer active.".into());
         }
-        let width = self
+        let previous = self
             .previous
             .as_ref()
-            .ok_or("No frames were captured yet.")?
-            .width;
+            .ok_or("No frames were captured yet.")?;
+        let width = previous.width;
         if destination.exists() {
             return Err("The output file already exists. Choose another name.".into());
         }
@@ -489,7 +632,7 @@ impl Session {
         // can be finalized; failure to truncate must never publish an image.
         if self.failed {
             self.file
-                .set_len(self.height as u64 * width as u64 * 4)
+                .set_len((self.height - self.pending_blank_rows) as u64 * width as u64 * 4)
                 .map_err(|e| format!("Could not restore the last accepted rows: {e}"))?;
         }
         self.file.flush().map_err(|e| e.to_string())?;
@@ -507,8 +650,9 @@ impl Session {
                 .create_new(true)
                 .open(&temporary)
                 .map_err(|e| e.to_string())?;
+            let tail = &previous.pixels[(previous.height - self.pending_blank_rows) * width * 4..];
             png::encode(
-                &mut self.file,
+                &mut (&mut self.file).chain(tail),
                 &mut output,
                 width as u32,
                 self.height as u32,
@@ -660,6 +804,20 @@ pub unsafe extern "C" fn sx_stitcher_content_rect(
         },
         StitchSession::Strict(_) => 0,
     }
+}
+
+/// 1 when a verified bottom overlay may cover the final content rows, otherwise 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sx_stitcher_excluded_bottom_overlay(handle: *mut SXStitcher) -> i32 {
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return 0;
+    };
+    let Ok(session) = handle.session.lock() else {
+        return 0;
+    };
+    i32::from(
+        matches!(&*session, StitchSession::Calibrated(session) if session.excluded_bottom_overlay),
+    )
 }
 
 /// Supply a structural suggestion before the first frame. Pixel verification

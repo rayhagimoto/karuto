@@ -177,14 +177,14 @@ final class ScrollCaptureDriver {
                         lastGrowth = clock.now
                     }
                     if before.isCalibrating, noGrowthAttempts < 3, self.progress.frameCount > before.frameCount,
-                       elapsed >= .milliseconds(160) { break }
-                    let rejected = self.progress.rejectedFrames > before.rejectedFrames
+                       !self.progress.hasUnresolvedOverlap, elapsed >= .milliseconds(160) { break }
+                    let rejected = self.progress.hasUnresolvedOverlap
                     let settling = rejected ? max(quietInterval, .milliseconds(550)) : quietInterval
                     if lastGrowth.duration(to: clock.now) >= settling {
                         // A busy stitcher can still have growth to report for this input.
                         await drainFrames()
                         if !Task.isCancelled, before.hasExtended, lastHeight == self.progress.height,
-                           before.rejectedFrames == self.progress.rejectedFrames, let bounds = self.verifiedBounds {
+                           !self.progress.hasUnresolvedOverlap, let bounds = self.verifiedBounds {
                             let point = CGPoint(x: bounds.midX, y: bounds.midY)
                             scrollPosition = await self.regionResolver.scrollPosition(pid: destination.owner.pid, point: point, verifiedBounds: bounds)
                             await drainFrames()
@@ -193,13 +193,13 @@ final class ScrollCaptureDriver {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                if self.progress.height > before.height {
+                if self.progress.hasUnresolvedOverlap {
+                    self.useManual("The overlap could not be verified. Return to the last captured area and scroll slowly, or choose Finish to review the partial capture.")
+                    return
+                } else if self.progress.height > before.height {
                     noGrowthAttempts = 0
                     lastProgress = nil
                     lastKnownPosition = .unknown
-                } else if self.progress.rejectedFrames > before.rejectedFrames {
-                    self.useManual("The overlap could not be verified. Return to the last captured area and scroll slowly, or choose Finish to review the partial capture.")
-                    return
                 } else {
                     noGrowthAttempts += 1
                     if scrollPosition != .unknown { lastKnownPosition = scrollPosition }
@@ -331,7 +331,7 @@ struct AutomaticScrollTiming {
 struct AutomaticScrollProgress {
     private(set) var height = 0
     private(set) var firstHeight: Int?
-    private(set) var rejectedFrames = 0
+    private(set) var hasUnresolvedOverlap = false
     private(set) var frameCount = 0
     private var sourcePixels: CGFloat = 0
     private(set) var isCalibrating = false
@@ -347,6 +347,7 @@ struct AutomaticScrollProgress {
     }
 
     func covered(step: Int32, since before: Self, sourceHeight: CGFloat) -> Bool {
+        guard !hasUnresolvedOverlap else { return false }
         if before.isCalibrating { return hasExtended }
         let scale = sourcePixels > 0 ? sourcePixels / sourceHeight : 1
         return CGFloat(height - before.height) >= ceil(CGFloat(step) * scale)
@@ -357,6 +358,7 @@ struct AutomaticScrollProgress {
         sourcePixels = progress.sourceSize.height
         if progress.disposition == 4 { isCalibrating = true; return }
         if progress.disposition == 0 {
+            hasUnresolvedOverlap = false
             isCalibrating = false
             if let viewportHeight = progress.viewportHeight, progress.sourceSize.height > 0 {
                 viewportFraction = min(1, CGFloat(viewportHeight) / progress.sourceSize.height)
@@ -364,7 +366,9 @@ struct AutomaticScrollProgress {
             if firstHeight == nil { firstHeight = progress.viewportHeight ?? progress.height }
             height = max(height, progress.height)
         } else if progress.disposition == 2 {
-            rejectedFrames += 1
+            hasUnresolvedOverlap = true
+        } else if progress.disposition == 5 {
+            hasUnresolvedOverlap = false
         }
     }
 }

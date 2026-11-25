@@ -163,6 +163,119 @@ fn nonoverlap_and_sticky_headers_require_reconnection() {
 }
 
 #[test]
+fn late_content_replaces_provisional_blank_rows_without_skipping_overlap() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    session.match_options = MatchOptions::CALIBRATED;
+    let (width, height, shift, populated) = (192, 360, 120, 228);
+    let stride = width * 4;
+    let document = pixels(width, height + shift, 0, 0);
+    let mut initial = document[..height * stride].to_vec();
+    initial[populated * stride..].fill(0xff);
+    session.append(&initial, width, height, stride).unwrap();
+
+    let next = &document[shift * stride..];
+    let progress = session.append(next, width, height, stride).unwrap();
+    assert_eq!(
+        (progress.disposition, progress.height),
+        (0, (height + shift) as u32)
+    );
+    let output = dir.0.join("late-content.png");
+    session.finish(&output).unwrap();
+    let (_, _, actual) = decode_png(&output);
+    assert!(actual == document, "late rows were skipped or duplicated");
+}
+
+#[test]
+fn late_render_without_motion_does_not_interrupt_scrolling() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    session.match_options = MatchOptions::CALIBRATED;
+    let (width, height, shift, populated) = (192, 360, 120, 228);
+    let stride = width * 4;
+    let document = pixels(width, height + shift, 0, 0);
+    let mut initial = document[..height * stride].to_vec();
+    initial[populated * stride..].fill(0xff);
+    session.append(&initial, width, height, stride).unwrap();
+
+    let repaint = session
+        .append(&document[..height * stride], width, height, stride)
+        .unwrap();
+    assert_eq!((repaint.disposition, repaint.height), (1, height as u32));
+    let moved = session
+        .append(&document[shift * stride..], width, height, stride)
+        .unwrap();
+    assert_eq!(
+        (moved.disposition, moved.height),
+        (0, (height + shift) as u32)
+    );
+    let output = dir.0.join("late-render.png");
+    session.finish(&output).unwrap();
+    let (_, _, actual) = decode_png(&output);
+    assert!(
+        actual == document,
+        "the stationary redraw must not add or duplicate rows"
+    );
+}
+
+#[test]
+fn finalizing_with_provisional_rows_keeps_the_accepted_blank_tail() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    session.match_options = MatchOptions::CALIBRATED;
+    let (width, height, populated) = (96, 144, 102);
+    let stride = width * 4;
+    let mut initial = pixels(width, height, 0, 0);
+    initial[populated * stride..].fill(0xff);
+    session.append(&initial, width, height, stride).unwrap();
+    assert_eq!(
+        session.file.metadata().unwrap().len(),
+        (populated * stride) as u64
+    );
+
+    let other = pixels(width, height, 3000, 0);
+    assert_eq!(
+        session
+            .append(&other, width, height, stride)
+            .unwrap()
+            .disposition,
+        2
+    );
+    let output = dir.0.join("blank-tail.png");
+    session.finish(&output).unwrap();
+    let (_, _, actual) = decode_png(&output);
+    assert!(actual == initial);
+}
+
+#[test]
+fn ordinary_overlap_leaves_previously_seen_pixels_intact() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    session.match_options = MatchOptions::CALIBRATED;
+    let (width, height, shift) = (192, 288, 72);
+    let stride = width * 4;
+    let mut document = pixels(width, height + shift, 0, 0);
+    document[225 * stride..height * stride].fill(0xff);
+    session
+        .append(&document[..height * stride], width, height, stride)
+        .unwrap();
+
+    let mut next = document[shift * stride..].to_vec();
+    next[160 * stride + 80 * 4] = 0;
+    assert_eq!(
+        session
+            .append(&next, width, height, stride)
+            .unwrap()
+            .disposition,
+        0
+    );
+    let output = dir.0.join("ordinary-overlap.png");
+    session.finish(&output).unwrap();
+    let (_, _, actual) = decode_png(&output);
+    assert!(actual == document);
+}
+
+#[test]
 fn repeated_content_is_not_given_an_arbitrary_seam() {
     let dir = TestDirectory::new();
     let mut session = Session::new(&dir.0).unwrap();
@@ -352,6 +465,113 @@ fn calibration_uses_structural_bounds_only_if_the_pixels_agree() {
 }
 
 #[test]
+fn calibrated_capture_excludes_a_floating_composer_from_appended_rows() {
+    let dir = TestDirectory::new();
+    let (width, height, overlay_top) = (320, 300, 260);
+    let stride = width * 4;
+    let mut document = [34, 34, 34, 255].repeat(width * 550);
+    for (y, x, w) in [
+        (20, 96, 132),
+        (69, 141, 111),
+        (107, 68, 138),
+        (152, 150, 107),
+        (201, 90, 121),
+        (243, 111, 143),
+        (303, 72, 160),
+        (374, 154, 107),
+        (431, 84, 155),
+        (496, 134, 118),
+    ] {
+        let block = pixels(w, 12, y, 0);
+        for row in 0..12 {
+            let offset = (y + row) * stride + x * 4;
+            document[offset..offset + w * 4]
+                .copy_from_slice(&block[row * w * 4..(row + 1) * w * 4]);
+        }
+    }
+    let overlay = pixels(84, 16, 80_000, 0);
+    for hint in [
+        None,
+        Some(ContentRect {
+            x: 0,
+            y: 0,
+            width: width as u32,
+            height: height as u32,
+        }),
+    ] {
+        let mut session = CalibratedSession::new(&dir.0).unwrap();
+        if let Some(hint) = hint {
+            assert!(session.set_hint(hint));
+        }
+        for (index, start) in [0, 12, 24, 36, 108, 180, 250].into_iter().enumerate() {
+            let mut frame = document[start * stride..(start + height) * stride].to_vec();
+            for row in 0..16 {
+                let offset = (overlay_top + row) * stride + 116 * 4;
+                frame[offset..offset + 84 * 4]
+                    .copy_from_slice(&overlay[row * 84 * 4..(row + 1) * 84 * 4]);
+            }
+            let progress = session.append(&frame, width, height, stride).unwrap();
+            assert_eq!(
+                progress.disposition,
+                if index < 3 { 4 } else { 0 },
+                "offset {start}, hint {hint:?}"
+            );
+        }
+        let rect = session.rect.unwrap();
+        assert!(session.excluded_bottom_overlay);
+        assert!(rect.y + rect.height <= overlay_top as u32);
+        let name = if hint.is_some() {
+            "hinted.png"
+        } else {
+            "inferred.png"
+        };
+        let output = dir.0.join(name);
+        session.finish(&output).unwrap();
+        let (w, h, stitched) = decode_png(&output);
+        assert_eq!((w, h), (rect.width as usize, rect.height as usize + 250));
+        let expected: Vec<_> = (rect.y as usize..rect.y as usize + h)
+            .flat_map(|y| {
+                let offset = y * stride + rect.x as usize * 4;
+                document[offset..offset + w * 4].iter().copied()
+            })
+            .collect();
+        assert!(
+            stitched == expected,
+            "stitched pixels differ for hint {hint:?}"
+        );
+    }
+}
+
+#[test]
+fn calibrated_capture_excludes_a_small_fixed_button_over_moving_rows() {
+    let dir = TestDirectory::new();
+    let (width, height, button_x, button_top) = (512, 288, 249, 261);
+    let (button_width, button_height) = (14, 12);
+    let stride = width * 4;
+    let button = pixels(button_width, button_height, 90_000, 0);
+    let mut session = CalibratedSession::new(&dir.0).unwrap();
+    for start in [0, 18, 36, 54, 128, 202] {
+        let mut frame = pixels(width, height, start, 0);
+        for y in 0..button_height {
+            let to = (button_top + y) * stride + button_x * 4;
+            let from = y * button_width * 4;
+            frame[to..to + button_width * 4]
+                .copy_from_slice(&button[from..from + button_width * 4]);
+        }
+        session.append(&frame, width, height, stride).unwrap();
+    }
+    assert!(session.excluded_bottom_overlay);
+    let output = dir.0.join("fixed-button.png");
+    session.finish(&output).unwrap();
+    let (w, h, stitched) = decode_png(&output);
+    assert_eq!((w, h), (width, button_top + 202));
+    assert!(
+        stitched == pixels(width, h, 0, 0),
+        "the fixed button was stitched into the moving content"
+    );
+}
+
+#[test]
 fn matching_does_not_require_ink_in_every_third_of_the_overlap() {
     let dir = TestDirectory::new();
     let mut session = Session::new(&dir.0).unwrap();
@@ -484,10 +704,29 @@ fn calibrated_capture_stitches_past_a_header_that_becomes_sticky() {
         .unwrap();
     assert_eq!(disconnected.disposition, 2);
 
+    let mut altered = viewport(296);
+    altered[80 * stride + 32] ^= 0xff;
+    assert_eq!(
+        session
+            .append(&altered, width, height, stride)
+            .unwrap()
+            .disposition,
+        2
+    );
+
+    // The first frame that overlaps again still has the pinned toolbar.
+    let resumed = session
+        .append(&viewport(296), width, height, stride)
+        .unwrap();
+    assert_eq!(
+        (resumed.disposition, resumed.height),
+        (0, (height + 296) as u32)
+    );
+
     let output = dir.0.join("sticky.png");
     session.finish(&output).unwrap();
     let (w, h, actual) = decode_png(&output);
-    assert_eq!((w, h), (width, height + 256));
+    assert_eq!((w, h), (width, height + 296));
     assert_eq!(actual, pixels(w, h, 0, 0));
 }
 

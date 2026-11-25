@@ -34,6 +34,7 @@ pub struct CalibratedSession {
     samples: Vec<Frame>,
     input_size: Option<(usize, usize)>,
     pub rect: Option<ContentRect>,
+    pub excluded_bottom_overlay: bool,
     hint: Option<ContentRect>,
     rejected: bool,
     retried_initial_motion: bool,
@@ -45,6 +46,7 @@ impl CalibratedSession {
             samples: Vec::new(),
             input_size: None,
             rect: None,
+            excluded_bottom_overlay: false,
             hint: None,
             rejected: false,
             retried_initial_motion: false,
@@ -101,10 +103,12 @@ impl CalibratedSession {
         if self.samples.len() < 4 {
             return Ok(self.pending(4));
         }
-        let suggested = self.hint.filter(|rect| {
-            rect.fits(width, height) && verifies(&self.samples, *rect, MatchOptions::PINNED_HEADER)
-        });
-        let Some(rect) = suggested.or_else(|| verified_rect(&self.samples)) else {
+        let suggested = self
+            .hint
+            .and_then(|rect| verified_candidate(&self.samples, rect, MatchOptions::PINNED_HEADER));
+        let Some((rect, excluded_bottom_overlay)) =
+            suggested.or_else(|| verified_rect(&self.samples))
+        else {
             // A hover or scrollbar repaint can precede the first actual movement.
             // Keep the baseline and require three verified pairs on the retry.
             if !self.retried_initial_motion {
@@ -133,6 +137,7 @@ impl CalibratedSession {
             }
         }
         self.rect = Some(rect);
+        self.excluded_bottom_overlay = excluded_bottom_overlay;
         Ok(result)
     }
     pub fn finish(&mut self, destination: &Path) -> Result<Progress> {
@@ -150,7 +155,7 @@ fn difference(a: &[u8], b: &[u8]) -> u32 {
 
 /// A pixel must change across a majority of calibration pairs to qualify. The result is
 /// only a proposal: every cropped pair still has to pass the strict matcher.
-fn verified_rect(samples: &[Frame]) -> Option<ContentRect> {
+fn verified_rect(samples: &[Frame]) -> Option<(ContentRect, bool)> {
     let first = samples.first()?;
     let (w, h) = (first.width, first.height);
     let mut changed = vec![false; w * h];
@@ -244,8 +249,12 @@ fn verified_rect(samples: &[Frame]) -> Option<ContentRect> {
             top_overlay: bottom == h && top <= h / 3,
             repaint: false,
         };
-        if verifies(samples, full, options) {
-            return Some(full);
+        if bottom == h {
+            if let Some(candidate) = verified_candidate(samples, full, options) {
+                return Some(candidate);
+            }
+        } else if verifies(samples, full, options) {
+            return Some((full, false));
         }
     }
     let rect = ContentRect {
@@ -254,19 +263,125 @@ fn verified_rect(samples: &[Frame]) -> Option<ContentRect> {
         width: (right - left) as u32,
         height: (bottom - top) as u32,
     };
-    (rect.fits(w, h) && verifies(samples, rect, MatchOptions::CALIBRATED)).then_some(rect)
+    verified_candidate(samples, rect, MatchOptions::CALIBRATED)
+}
+
+fn verified_candidate(
+    samples: &[Frame],
+    rect: ContentRect,
+    options: MatchOptions,
+) -> Option<(ContentRect, bool)> {
+    if !rect.fits(samples[0].width, samples[0].height) {
+        return None;
+    }
+    if let Some(clean) = without_bottom_overlay(samples, rect, options) {
+        return Some((clean, true));
+    }
+    verifies(samples, rect, options).then_some((rect, false))
+}
+
+/// A floating bottom control can have moving content beside it or below it.
+/// Require independent evidence that it stays still while the pane scrolls.
+fn without_bottom_overlay(
+    samples: &[Frame],
+    rect: ContentRect,
+    options: MatchOptions,
+) -> Option<ContentRect> {
+    let probe = ContentRect {
+        height: rect.height * 3 / 4,
+        ..rect
+    };
+    let top = rect.y as usize;
+    let rows = top + probe.height as usize..top + rect.height as usize;
+    let columns = rect.x as usize + 2..(rect.x + rect.width) as usize - 2;
+    let width = samples[0].width;
+    let change = |a: &Frame, p: usize, b: &Frame, q: usize| {
+        difference(&a.pixels[p..p + 4], &b.pixels[q..q + 4])
+    };
+    let contrast = |p| change(&samples[0], p, &samples[0], p - 4) > 18;
+    let stays_put = |pair: &[Frame], p| {
+        change(&pair[0], p, &pair[1], p) <= 9 && change(&pair[0], p - 4, &pair[1], p - 4) <= 9
+    };
+    let row_pixels = |y| columns.clone().map(move |x| (y * width + x) * 4);
+    // Look for local stationary edges. A narrow control can cover only a few
+    // pixels of a row whose remaining text moves normally.
+    let candidates: Vec<_> = rows
+        .clone()
+        .filter(|&y| {
+            row_pixels(y)
+                .filter(|&p| {
+                    contrast(p)
+                        && samples
+                            .windows(2)
+                            .filter(|pair| stays_put(pair, p))
+                            .nth(1)
+                            .is_some()
+                })
+                .nth(3)
+                .is_some()
+        })
+        .collect();
+    if candidates.len() < 3 || probe.height < 32 {
+        return None;
+    }
+    let shifts: Vec<_> = samples
+        .windows(2)
+        .map(|pair| pair_displacement(pair, probe, options))
+        .collect::<Option<_>>()?;
+    let fixed_edge = |p| {
+        contrast(p)
+            && samples
+                .windows(2)
+                .zip(&shifts)
+                .filter(|&(pair, &shift)| {
+                    stays_put(pair, p) && change(&pair[0], p, &pair[1], p - shift * width * 4) > 18
+                })
+                .nth(1)
+                .is_some()
+    };
+    let fixed_rows: Vec<_> = candidates
+        .into_iter()
+        .filter(|&y| row_pixels(y).filter(|&p| fixed_edge(p)).nth(3).is_some())
+        .collect();
+    // A small glyph may have only a few strong edges in one row. Require a
+    // run of adjacent rows so isolated matching edges cannot mark a control.
+    let first_fixed = fixed_rows.windows(3).find(|run| run[2] == run[0] + 2)?[0];
+
+    // Cut before the first row that disagrees after translation. A control's
+    // shadow can alter the pixels well above its first high-contrast edge.
+    let disagreement = |p| {
+        samples
+            .windows(2)
+            .zip(&shifts)
+            .any(|(pair, &shift)| change(&pair[0], p, &pair[1], p - shift * width * 4) > 0)
+    };
+    let bottom = (rows.start..first_fixed)
+        .find(|&y| row_pixels(y).filter(|&p| disagreement(p)).nth(7).is_some())
+        .unwrap_or(first_fixed);
+    let clean = ContentRect {
+        height: (bottom - top) as u32,
+        ..rect
+    };
+    samples
+        .windows(2)
+        .zip(shifts)
+        .all(|(pair, shift)| pair_displacement(pair, clean, options) == Some(shift))
+        .then_some(clean)
+}
+
+fn pair_displacement(pair: &[Frame], rect: ContentRect, options: MatchOptions) -> Option<usize> {
+    let a_raw = pair[0].view();
+    let b_raw = pair[1].view();
+    let a = rect.view(&a_raw);
+    let b = rect.view(&b_raw);
+    let previous = Frame::from_view(&a, a.signature());
+    displacement(&previous, &b, &b.signature(), options)
 }
 
 fn verifies(samples: &[Frame], rect: ContentRect, options: MatchOptions) -> bool {
-    samples.windows(2).all(|pair| {
-        let a_raw = pair[0].view();
-        let b_raw = pair[1].view();
-        let a = rect.view(&a_raw);
-        let b = rect.view(&b_raw);
-        let previous = Frame::from_view(&a, a.signature());
-        // A gesture can begin with a single pixel of uniquely matched motion.
-        displacement(&previous, &b, &b.signature(), options).is_some()
-    })
+    samples
+        .windows(2)
+        .all(|pair| pair_displacement(pair, rect, options).is_some())
 }
 
 enum Edge {

@@ -180,10 +180,26 @@ struct AutomaticScrollTests {
         evidence.observe(StitchProgress(height: 600, message: "", accepted: false, disposition: 1))
         #expect(!evidence.hasExtended)
         evidence.observe(StitchProgress(height: 900, message: "", accepted: false, disposition: 2))
-        #expect(evidence.rejectedFrames == 1)
+        #expect(evidence.hasUnresolvedOverlap)
         #expect(!evidence.hasExtended)
         evidence.observe(StitchProgress(height: 800, message: "", accepted: true, disposition: 0))
         #expect(evidence.hasExtended)
         #expect(evidence.height == 800)
+        #expect(!evidence.hasUnresolvedOverlap)
+    }
+
+    @Test func anotherScrollWaitsForTheCurrentOverlapToRecover() {
+        var evidence = AutomaticScrollProgress()
+        func frame(_ height: Int, _ disposition: Int) -> StitchProgress {
+            StitchProgress(height: height, message: "", accepted: disposition == 0, disposition: disposition)
+        }
+        evidence.observe(frame(600, 0))
+        let before = evidence
+        evidence.observe(frame(640, 0))
+        evidence.observe(frame(640, 2))
+        evidence.observe(frame(640, 1))
+        #expect(!evidence.covered(step: 40, since: before, sourceHeight: 600))
+        evidence.observe(frame(640, 5))
+        #expect(evidence.covered(step: 40, since: before, sourceHeight: 600))
     }
 }
