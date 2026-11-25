@@ -695,9 +695,6 @@ final class CaptureUIController: NSObject {
     }
 
     private func makeToolbar(on display: CaptureDisplay) {
-        let tileSize = NSSize(width: 52, height: 44)
-        let horizontalInset: CGFloat = 10
-        let surfaceHeight = tileSize.height + 12
         let root = CaptureToolbarView(frame: .zero)
         root.appearance = NSAppearance(named: .darkAqua)
         root.autoresizingMask = [.width, .height]
@@ -710,28 +707,29 @@ final class CaptureUIController: NSObject {
             self?.updateSizeControl()
         }
         let content = NSView()
-        let surface = SettingsGlassSurface()
-        surface.translatesAutoresizingMaskIntoConstraints = false
+        let surface = CaptureSurface(interactive: false)
         content.addSubview(surface)
-        surface.content.wantsLayer = true
-        surface.content.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        surface.content.layer?.cornerRadius = 20
+        surface.contentView.wantsLayer = true
+        surface.contentView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
         let row = NSStackView()
-        row.spacing = 3
         row.alignment = .centerY
-        row.translatesAutoresizingMaskIntoConstraints = false
-        surface.content.addSubview(row)
+        surface.contentView.addSubview(row)
 
+        var sizeDividers: [(CGFloat) -> Void] = []
         func divider(leading: CGFloat, trailing: CGFloat) {
+            let previous = row.arrangedSubviews.last
             let line = NSBox()
             line.boxType = .separator
-            if let previous = row.arrangedSubviews.last {
-                row.setCustomSpacing(leading, after: previous)
-            }
             row.addArrangedSubview(line)
-            row.setCustomSpacing(trailing, after: line)
-            line.widthAnchor.constraint(equalToConstant: 1).isActive = true
-            line.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            let width = line.widthAnchor.constraint(equalToConstant: 1)
+            let height = line.heightAnchor.constraint(equalToConstant: 30)
+            NSLayoutConstraint.activate([width, height])
+            sizeDividers.append { scale in
+                width.constant = scale
+                height.constant = 30 * scale
+                if let previous { row.setCustomSpacing(leading * scale, after: previous) }
+                row.setCustomSpacing(trailing * scale, after: line)
+            }
         }
         let modes = CaptureMode.allCases.map { mode in
             let button = CaptureToolbarButton(mode.title, symbol: mode == .snapshot ? "camera" : "record.circle") { [weak self] in
@@ -785,48 +783,54 @@ final class CaptureUIController: NSObject {
         let message = captureLabel("", size: 11)
         message.alignment = .center
         message.lineBreakMode = .byTruncatingTail
-        message.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(message)
         message.textColor = .white
         message.wantsLayer = true
         message.layer?.shadowColor = NSColor.black.cgColor
         message.layer?.shadowOpacity = 0.8
-        message.layer?.shadowRadius = 3
         message.layer?.shadowOffset = .zero
         hint = message
-        for button in focusGroups.joined() {
-            button.symbolScale = ceil(toolbarScale)
+        let buttons = focusGroups.flatMap { $0 }
+        for button in buttons {
             button.focusChanged = { [weak message, weak button] in
                 if let button { button.scrollToVisible(button.bounds) }
                 message?.stringValue = button?.focusHint ?? ""
             }
-            let size = button.isRegionTile ? tileSize : button.intrinsicContentSize
-            button.widthAnchor.constraint(equalToConstant: size.width).isActive = true
-            button.heightAnchor.constraint(equalToConstant: size.height).isActive = true
         }
-        let width = row.fittingSize.width + 2 * horizontalInset
-        content.frame.size = CGSize(width: width, height: surfaceHeight + 20)
+        root.layoutContent = { [weak self] in
+            guard let scale = self?.toolbarScale else { return }
+            for button in buttons { button.symbolScale = scale }
+            selector.applyScale(scale)
+            regionRow.applyScale(scale)
+            row.spacing = 3 * scale
+            for sizeDivider in sizeDividers { sizeDivider(scale) }
+            let rowSize = row.fittingSize
+            let inset = 10 * scale
+            let width = ceil(rowSize.width + 2 * inset)
+            let surfaceHeight = 56 * scale
+            content.setFrameSize(NSSize(width: width, height: ceil(76 * scale)))
+            let surfaceFrame = NSRect(x: 0, y: content.bounds.height - surfaceHeight, width: width, height: surfaceHeight)
+            surface.frame = content.backingAlignedRect(surfaceFrame, options: .alignAllEdgesNearest)
+            surface.cornerRadius = 20 * scale
+            surface.contentView.layer?.cornerRadius = surface.cornerRadius
+            let rowFrame = NSRect(origin: CGPoint(x: inset, y: (surface.frame.height - rowSize.height) / 2), size: rowSize)
+            row.frame = surface.contentView.backingAlignedRect(rowFrame, options: .alignAllEdgesNearest)
+            message.font = .systemFont(ofSize: 11 * scale)
+            message.layer?.shadowRadius = 3 * scale
+            let height = message.intrinsicContentSize.height
+            let hintFrame = NSRect(x: inset, y: surface.frame.minY - 4 * scale - height, width: width - 2 * inset, height: height)
+            message.frame = content.backingAlignedRect(hintFrame, options: .alignAllEdgesNearest)
+        }
+        root.layoutContent?()
         root.installContent(content)
         let previous = lastToolbarFrame.flatMap { display.frame.contains(CGPoint(x: $0.midX, y: $0.midY)) ? $0 : nil }
-        let origin = CGPoint(x: (previous?.midX ?? display.frame.midX) - width / 2, y: previous?.minY ?? display.frame.minY + 55)
+        let origin = CGPoint(x: (previous?.midX ?? display.frame.midX) - content.frame.width / 2, y: previous?.minY ?? display.frame.minY + 55)
         let panel = CapturePanel(contentRect: CGRect(origin: origin, size: content.frame.size), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
         panel.contentMinSize = .zero
         let visibleFrame = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.id })?.visibleFrame ?? display.frame
         panel.contentView = root
         panel.initialFirstResponder = root
-        NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: content.topAnchor),
-            surface.heightAnchor.constraint(equalToConstant: surfaceHeight),
-            row.leadingAnchor.constraint(equalTo: surface.content.leadingAnchor, constant: horizontalInset),
-            row.trailingAnchor.constraint(equalTo: surface.content.trailingAnchor, constant: -horizontalInset),
-            row.centerYAnchor.constraint(equalTo: surface.content.centerYAnchor),
-            message.topAnchor.constraint(equalTo: surface.bottomAnchor, constant: 4),
-            message.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
-            message.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10)
-        ])
-        root.resize(to: toolbarScale, within: visibleFrame)
+        root.fit(within: visibleFrame)
         updateShortcutHints()
         toolbar = panel
     }
@@ -1068,9 +1072,7 @@ final class CaptureUIController: NSObject {
         settings?.captureToolbarScale = scale
         guard let toolbar, let root = toolbar.contentView as? CaptureToolbarView,
               let visibleFrame = toolbar.screen?.visibleFrame ?? hostDisplay?.frame else { return }
-        root.resize(to: scale, within: visibleFrame)
-        // Request higher-resolution symbols only when crossing a whole zoom level.
-        for button in focusGroups.joined() { button.symbolScale = ceil(scale) }
+        root.fit(within: visibleFrame)
         lastToolbarFrame = toolbar.frame
         updateSizeControl()
     }
@@ -1172,6 +1174,7 @@ final class CaptureUIController: NSObject {
 @MainActor
 final class CaptureToolbarView: NSView, NSGestureRecognizerDelegate {
     var onMove: ((CGRect) -> Void)?
+    var layoutContent: (() -> Void)?
     private let scrollView = NSScrollView()
     private var initialFrame: CGRect?
     private var initialPointer = CGPoint.zero
@@ -1190,6 +1193,11 @@ final class CaptureToolbarView: NSView, NSGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override var acceptsFirstResponder: Bool { true }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        layoutContent?()
+    }
+
     func installContent(_ content: NSView) {
         setFrameSize(content.frame.size)
         scrollView.frame = bounds
@@ -1197,17 +1205,16 @@ final class CaptureToolbarView: NSView, NSGestureRecognizerDelegate {
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.scrollerStyle = .legacy
-        scrollView.minMagnification = ToolbarScale.range.lowerBound
-        scrollView.maxMagnification = ToolbarScale.range.upperBound
         scrollView.documentView = content
         addSubview(scrollView)
     }
 
-    func resize(to scale: CGFloat, within screen: CGRect) {
+    func fit(within screen: CGRect) {
         guard let window, let content = scrollView.documentView else { return }
+        layoutContent?()
         let available = screen.insetBy(dx: 8, dy: 8)
-        let width = ceil(content.frame.width * scale)
-        let height = ceil(content.frame.height * scale)
+        let width = ceil(content.frame.width)
+        let height = ceil(content.frame.height)
         let bar = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
         let vertical = height + (width > available.width ? bar : 0) > available.height
         let horizontal = width + (vertical ? bar : 0) > available.width
@@ -1218,7 +1225,7 @@ final class CaptureToolbarView: NSView, NSGestureRecognizerDelegate {
         let origin = CGPoint(x: window.frame.midX - size.width / 2, y: window.frame.minY)
         let frame = ToolbarGeometry.clamped(CGRect(origin: origin, size: size), to: screen)
         window.setFrame(frame, display: false)
-        scrollView.magnification = scale
+        content.layoutSubtreeIfNeeded()
         if let button = window.firstResponder as? NSButton { button.scrollToVisible(button.bounds) }
         window.displayIfNeeded()
     }
@@ -1252,7 +1259,7 @@ final class CaptureToolbarView: NSView, NSGestureRecognizerDelegate {
                                              visibleFrames: NSScreen.screens.map(\.visibleFrame))
             window.setFrameOrigin(next.origin)
             if recognizer.state == .ended, let screen = window.screen {
-                resize(to: scrollView.magnification, within: screen.visibleFrame)
+                fit(within: screen.visibleFrame)
             }
             onMove?(window.frame)
         }

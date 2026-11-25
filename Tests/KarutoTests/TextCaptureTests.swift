@@ -183,13 +183,20 @@ struct TextCaptureTests {
         let panel = try #require(NSApp.windows.first { $0.accessibilityLabel() == "Area annotation tools" && $0.isVisible })
         let buttons = try #require(panel.contentView).subviews.flatMap(descendants).compactMap { $0 as? CaptureActionButton }
         let button = try #require(buttons.first { $0.accessibilityLabel() == "Recognize text" })
+        let pen = try #require(buttons.first { $0.accessibilityLabel() == "Pen" })
+        editor.select(.pen)
+        let size = try #require(buttons.first { $0.accessibilityLabel() == "Annotation palette size" })
+        size.performClick(nil)
+        #expect(buttons.filter(\.isToolActive) == [pen])
         button.performClick(nil)
         #expect(toggles == 1)
         editor.ocrEnabled = true
+        #expect(buttons.filter(\.isToolActive) == [button])
         #expect(button.state == .on)
         #expect(button.isEnabled)
-        #expect(buttons.first { $0.accessibilityLabel() == "Pen" }?.isEnabled == false)
+        #expect(!pen.isEnabled)
         editor.ocrEnabled = false
+        #expect(buttons.filter(\.isToolActive) == [pen])
         #expect(button.state == .off)
     }
 

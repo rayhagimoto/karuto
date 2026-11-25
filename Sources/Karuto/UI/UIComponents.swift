@@ -51,17 +51,33 @@ final class CaptureToolbarButton: ClosureButton {
     fileprivate var showSelectionFocus: ((Bool) -> Void)?
     var symbolName: String { didSet { if oldValue != symbolName { updateGlyph() } } }
     var shortcut: String? { didSet { if oldValue != shortcut { updateGlyph() } } }
-    var isRegionTile = false { didSet { if oldValue != isRegionTile { updateGlyph() } } }
-    var symbolScale: CGFloat = 1 { didSet { if oldValue != symbolScale { updateGlyph() } } }
+    var isRegionTile = false {
+        didSet {
+            if oldValue != isRegionTile {
+                invalidateIntrinsicContentSize()
+                updateGlyph()
+            }
+        }
+    }
+    var symbolScale: CGFloat = 1 {
+        didSet {
+            if oldValue != symbolScale {
+                invalidateIntrinsicContentSize()
+                updateGlyph()
+            }
+        }
+    }
     var showsPressEffect = true { didSet { if oldValue != showsPressEffect { updateGlyph() } } }
-    var drawsSelection = true
+    fileprivate var isSelectionOption = false
     private var keyboardFocused = false
     override var state: NSControl.StateValue { didSet { if oldValue != state { updateGlyph() } } }
     override var isEnabled: Bool { didSet { if oldValue != isEnabled { updateGlyph() } } }
     override var isHighlighted: Bool { didSet { if oldValue != isHighlighted { updateGlyph() } } }
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
     override var acceptsFirstResponder: Bool { isEnabled }
-    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 32) }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: (isRegionTile ? 52 : 34) * symbolScale, height: (isRegionTile ? 44 : 32) * symbolScale)
+    }
 
     init(_ label: String, symbol: String, checked: Bool = false, handler: (() -> Void)? = nil) {
         focusHint = label
@@ -86,8 +102,9 @@ final class CaptureToolbarButton: ClosureButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func updateGlyph() {
+        let selected = (isSelectionOption || showsCheckmark) && state == .on
         glyph.rootView = ToolbarGlyph(symbol: symbolName, shortcut: shortcut, isRegionTile: isRegionTile,
-                                      selected: state == .on, drawsSelection: drawsSelection, checked: showsCheckmark && state == .on,
+                                      selected: selected, checked: showsCheckmark && selected,
                                       enabled: isEnabled, highlighted: isHighlighted && showsPressEffect, focused: keyboardFocused,
                                       dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
                                       symbolScale: symbolScale)
@@ -131,7 +148,6 @@ private struct ToolbarGlyph: View {
     var shortcut: String? = nil
     var isRegionTile = false
     var selected = false
-    var drawsSelection = true
     var checked = false
     var enabled = true
     var highlighted = false
@@ -144,8 +160,7 @@ private struct ToolbarGlyph: View {
     private var ink: Color { dark ? .white : .black }
     private var tileOpacity: Double {
         if highlighted { return 0.18 }
-        if checked { return 0.13 }
-        return selected && drawsSelection ? 0.075 : 0
+        return checked ? 0.13 : 0
     }
 
     var body: some View {
@@ -176,27 +191,26 @@ private struct ToolbarGlyph: View {
             }
         .foregroundStyle(ink.opacity(selected || focused ? 1 : 0.78))
         .fixedSize()
-        .scaleEffect(1 / symbolScale)
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .overlay(alignment: .topLeading) {
             if let shortcut {
                 Text(shortcut)
-                    .font(.system(size: isRegionTile ? 9 : 8, weight: .medium))
+                    .font(.system(size: (isRegionTile ? 9 : 8) * symbolScale, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(ink.opacity(0.25))
-                    .padding(.leading, isRegionTile ? 7 : 2)
-                    .padding(.top, isRegionTile ? 3 : 1)
+                    .padding(.leading, (isRegionTile ? 7 : 2) * symbolScale)
+                    .padding(.top, (isRegionTile ? 3 : 1) * symbolScale)
             }
         }
         .background {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: 7 * symbolScale)
                 .fill(ink.opacity(tileOpacity))
         }
         .overlay {
             if focused {
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(ink.opacity(0.72), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 7 * symbolScale)
+                    .strokeBorder(ink.opacity(0.72), lineWidth: 2 * symbolScale)
             }
         }
         .opacity(enabled ? 1 : 0.35)
@@ -208,28 +222,26 @@ private struct ToolbarGlyph: View {
 @MainActor
 final class CaptureModeSelector: NSStackView {
     private let selection = CALayer()
-    private let selectionInset: CGFloat
+    private let isAreaSelector: Bool
+    private var selectionInset: CGFloat = 0
     private weak var selectedButton: CaptureToolbarButton?
 
     init(buttons: [CaptureToolbarButton], isAreaSelector: Bool = false) {
-        selectionInset = isAreaSelector ? 0 : 3
+        self.isAreaSelector = isAreaSelector
         super.init(frame: .zero)
-        spacing = isAreaSelector ? 0 : 2
         distribution = .fillEqually
         wantsLayer = true
-        layer?.cornerRadius = isAreaSelector ? 0 : 22
-        layer?.borderWidth = isAreaSelector ? 0 : 1
-        selection.cornerRadius = isAreaSelector ? 7 : 19
+        applyScale(1)
         layer?.insertSublayer(selection, at: 0)
         setAccessibilityElement(true)
         setAccessibilityRole(.radioGroup)
         setAccessibilityLabel(isAreaSelector ? "Area selection mode" : "Capture mode")
         for button in buttons {
-            button.drawsSelection = false
+            button.isSelectionOption = true
             if !isAreaSelector {
                 button.showsPressEffect = false
-                button.showSelectionFocus = { [weak selection] focused in
-                    selection?.borderWidth = focused ? 2 : 0
+                button.showSelectionFocus = { [weak selection, weak button] focused in
+                    selection?.borderWidth = focused ? 2 * (button?.symbolScale ?? 1) : 0
                 }
             }
             button.setAccessibilityRole(.radioButton)
@@ -239,6 +251,15 @@ final class CaptureModeSelector: NSStackView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func applyScale(_ scale: CGFloat) {
+        spacing = isAreaSelector ? 0 : 2 * scale
+        selectionInset = isAreaSelector ? 0 : 3 * scale
+        layer?.cornerRadius = isAreaSelector ? 0 : 22 * scale
+        layer?.borderWidth = isAreaSelector ? 0 : scale
+        selection.cornerRadius = (isAreaSelector ? 7 : 19) * scale
+        if selection.borderWidth > 0 { selection.borderWidth = 2 * scale }
+    }
 
     func select(_ index: Int) {
         guard let button = arrangedSubviews[index] as? CaptureToolbarButton, button !== selectedButton else { return }
@@ -299,7 +320,13 @@ final class CaptureModeSelector: NSStackView {
 @MainActor
 final class CaptureActionButton: ClosureButton {
     var emphasized = false
-    var showsBackground = true
+    // AppKit can leave a momentary button's state on after a click.
+    var isToolActive = false {
+        didSet {
+            state = isToolActive ? .on : .off
+            setAccessibilityValue(isToolActive ? 1 : 0)
+        }
+    }
     var iconScale: CGFloat = 1 {
         didSet {
             guard iconScale != oldValue else { return }
@@ -324,8 +351,8 @@ final class CaptureActionButton: ClosureButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let radius = 7 * iconScale
-        if showsBackground || isHighlighted {
-            let fill: CGFloat = isHighlighted ? 0.22 : emphasized || state == .on ? 0.13 : 0.06
+        if !title.isEmpty || isToolActive || isHighlighted {
+            let fill: CGFloat = isHighlighted ? 0.22 : emphasized || isToolActive ? 0.13 : 0.06
             NSColor.labelColor.withAlphaComponent(isEnabled ? fill : 0.03).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
         }
@@ -335,16 +362,19 @@ final class CaptureActionButton: ClosureButton {
         let iconWidth: CGFloat = image == nil ? 0 : 20
         let contentX = (bounds.width - textSize.width - iconWidth) / 2
         if let image {
-            let size = 14 * iconScale
-            let iconX = title.isEmpty ? bounds.midX - size / 2 : contentX
             let colors = NSImage.SymbolConfiguration(paletteColors: [tint])
-            let configuration = iconScale == 1 ? colors : NSImage.SymbolConfiguration(pointSize: size, weight: .regular).applying(colors)
+            let configuration = title.isEmpty
+                ? NSImage.SymbolConfiguration(pointSize: 12 * iconScale, weight: .regular).applying(colors)
+                : colors
             if let symbol = image.withSymbolConfiguration(configuration) {
-                let scale = size / max(symbol.size.width, symbol.size.height)
+                // Icon-only tiles give SF Symbols their natural metrics at every toolbar size.
+                let scale = title.isEmpty ? 1 : 14 / max(symbol.size.width, symbol.size.height)
                 let width = symbol.size.width * scale
                 let height = symbol.size.height * scale
-                symbol.draw(in: NSRect(x: iconX + (size - width) / 2, y: bounds.midY - height / 2,
-                                       width: width, height: height), from: .zero,
+                let x = title.isEmpty ? bounds.midX - width / 2 : contentX + (14 - width) / 2
+                var rect = NSRect(x: x, y: bounds.midY - height / 2, width: width, height: height)
+                rect.origin = backingAlignedRect(rect, options: .alignAllEdgesNearest).origin
+                symbol.draw(in: rect, from: .zero,
                             operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             }
         }
@@ -363,15 +393,15 @@ final class CaptureSurface: NSView {
     var cornerRadius: CGFloat = 16 { didSet { updateCornerRadius() } }
     private var effectView: NSView?
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(frame: NSRect = .zero, interactive: Bool = true) {
+        super.init(frame: frame)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .regular
             glass.contentView = contentView
             // The native effect supplies refraction, blur, and its own edge
             // treatment. No painted tint or extra border sits over the glass.
-            if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
+            if #available(macOS 27.0, *) { glass.effectIsInteractive = interactive }
             effectView = glass
             pinSubview(glass, to: self)
             contentView.translatesAutoresizingMaskIntoConstraints = false

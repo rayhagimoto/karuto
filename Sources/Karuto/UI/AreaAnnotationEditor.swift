@@ -422,11 +422,9 @@ final class AreaAnnotationEditor: NSObject {
     private func syncButtons() {
         for (key, b) in buttons {
             b.isEnabled = !ocrEnabled
-            b.state = key == tool ? .on : .off
-            b.setAccessibilityValue(key == tool ? 1 : 0)
+            b.isToolActive = !ocrEnabled && key == tool
         }
-        ocrButton?.state = ocrEnabled ? .on : .off
-        ocrButton?.setAccessibilityValue(ocrEnabled ? 1 : 0)
+        ocrButton?.isToolActive = ocrEnabled
         undoButton?.isEnabled = !ocrEnabled && canUndo
         redoButton?.isEnabled = !ocrEnabled && !undone.isEmpty
         colorButton?.isEnabled = !ocrEnabled
@@ -462,7 +460,7 @@ final class AreaAnnotationEditor: NSObject {
         paletteTools.spacing = 3 * paletteScale
         paletteTools.setFrameSize(paletteTools.fittingSize)
         (palette?.contentView as? CaptureSurface)?.cornerRadius = 11 * paletteScale
-        paletteGrip?.resize(to: 1, within: screen)
+        paletteGrip?.fit(within: screen)
     }
 
     private func positionPalette() {

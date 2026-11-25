@@ -208,8 +208,7 @@ final class AnnotationTextEditor: NSObject, NSTextViewDelegate, NSTextFieldDeleg
         if syncEntry { sizeField.stringValue = style.size.formatted(.number.precision(.fractionLength(0...2))) }
         alignment.selectedSegment = style.alignment.rawValue
         for (button, enabled) in zip(styleButtons, [style.bold, style.italic, style.underline]) {
-            button.state = enabled ? .on : .off
-            button.setAccessibilityValue(enabled ? 1 : 0)
+            button.isToolActive = enabled
         }
         onChange?()
     }

@@ -38,7 +38,9 @@ struct UICursorTests {
             let stop = (exponent * 2).rounded() / 2
             let scale = exp2(stop)
             #expect(slider.doubleValue == stop)
-            #expect(abs(area.convert(area.bounds, to: root).width - originalSize.width * scale) < 0.01)
+            #expect(scroll.magnification == 1)
+            #expect(abs(area.bounds.width - originalSize.width * scale) <= 1)
+            #expect(area.convert(area.bounds, to: root).size == area.bounds.size)
             #expect(settings.captureToolbarScale == scale)
             #expect(settings.annotationPaletteScale == 1)
             if exponent == -2 {
@@ -48,7 +50,7 @@ struct UICursorTests {
                 #expect(root.hitTest(center) === area)
             }
         }
-        root.resize(to: 4, within: display.frame)
+        root.fit(within: display.frame)
         #expect(scroll.hasHorizontalScroller)
         let options = try #require(descendants(root).first { $0.accessibilityLabel() == "Capture options" })
         options.scrollToVisible(options.bounds)
