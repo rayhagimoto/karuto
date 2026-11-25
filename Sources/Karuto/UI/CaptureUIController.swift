@@ -87,6 +87,7 @@ final class CaptureUIController: NSObject {
     private var regionButtons: [CaptureRegion: CaptureToolbarButton] = [:]
     private let sizeControl = SelectionSizeControl()
     private var modeControl: CaptureModeSelector?
+    private var regionControl: CaptureModeSelector?
     private var timerControl: CaptureToolbarButton?
     private var hint: NSTextField?
     private var focusGroups: [[CaptureToolbarButton]] = []
@@ -267,6 +268,7 @@ final class CaptureUIController: NSObject {
         focusGroups.removeAll()
         shortcutButtons.removeAll()
         modeControl = nil
+        regionControl = nil
         timerControl = nil
         hint = nil
         NSCursor.arrow.set()
@@ -518,6 +520,7 @@ final class CaptureUIController: NSObject {
             button.setAccessibilityValue(buttonRegion == region ? 1 : 0)
             button.needsDisplay = true
         }
+        if let index = CaptureRegion.allCases.firstIndex(of: region) { regionControl?.select(index) }
         updateModeControls()
         overlays.forEach {
             $0.cancelInteraction()
@@ -751,22 +754,20 @@ final class CaptureUIController: NSObject {
             (.area, "viewfinder", .areaMode), (.fullscreen, "display", .fullscreenMode),
             (.window, "macwindow", .windowMode), (.scrolling, "doc.text", .scrollingMode)
         ]
-        let regionRow = NSStackView()
-        regionRow.spacing = 0
-        regionRow.alignment = .centerY
-        regionRow.widthAnchor.constraint(equalToConstant: 280).isActive = true
-        row.addArrangedSubview(regionRow)
         var choices: [CaptureToolbarButton] = []
         for (region, symbol, action) in regions {
             let button = CaptureToolbarButton(region.title, symbol: symbol) { [weak self] in self?.setRegion(region) }
             button.isRegionTile = true
             button.setAccessibilityRole(.radioButton)
-            regionRow.addArrangedSubview(button)
             button.widthAnchor.constraint(equalToConstant: 70).isActive = true
             regionButtons[region] = button
             shortcutButtons[action] = button
             choices.append(button)
         }
+        let regionRow = CaptureModeSelector(buttons: choices, isAreaSelector: true)
+        regionControl = regionRow
+        regionRow.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        row.addArrangedSubview(regionRow)
         divider(extraTrailing: 12)
         let timer = CaptureToolbarButton("Capture timer", symbol: "clock")
         timer.handler = { [weak self, weak timer] in
@@ -904,7 +905,12 @@ final class CaptureUIController: NSObject {
         guard let toolbar, let window = event.window, window === toolbar || overlayPanels.contains(where: { $0 === window }),
               !toolbarHiddenForInk, !toolbar.ignoresMouseEvents else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let focused = window.firstResponder as? CaptureToolbarButton
+        var focused = window.firstResponder as? CaptureToolbarButton
+        if focused == nil, (window === toolbar && window.firstResponder === toolbar.contentView || overlayPanels.contains(where: { $0 === window })),
+           modifiers.isEmpty, event.keyCode == 123 || event.keyCode == 124 {
+            focusGroup(1)
+            focused = toolbar.firstResponder as? CaptureToolbarButton
+        }
         let group = focusGroups.firstIndex { buttons in buttons.contains { $0 === focused } }
         if event.keyCode == 48, modifiers.isEmpty || modifiers == [.shift] {
             let backwards = modifiers.contains(.shift)

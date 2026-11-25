@@ -197,20 +197,22 @@ private struct ToolbarGlyph: View {
 @MainActor
 final class CaptureModeSelector: NSStackView {
     private let selection = CALayer()
+    private let selectionInset: CGFloat
     private weak var selectedButton: CaptureToolbarButton?
 
-    init(buttons: [CaptureToolbarButton]) {
+    init(buttons: [CaptureToolbarButton], isAreaSelector: Bool = false) {
+        selectionInset = isAreaSelector ? 0 : 3
         super.init(frame: .zero)
-        spacing = 2
+        spacing = isAreaSelector ? 0 : 2
         distribution = .fillEqually
         wantsLayer = true
-        layer?.cornerRadius = 28
-        layer?.borderWidth = 1
-        selection.cornerRadius = 23
+        layer?.cornerRadius = isAreaSelector ? 0 : 28
+        layer?.borderWidth = isAreaSelector ? 0 : 1
+        selection.cornerRadius = isAreaSelector ? 7 : 23
         layer?.insertSublayer(selection, at: 0)
         setAccessibilityElement(true)
         setAccessibilityRole(.radioGroup)
-        setAccessibilityLabel("Capture mode")
+        setAccessibilityLabel(isAreaSelector ? "Area selection mode" : "Capture mode")
         for button in buttons {
             button.drawsSelection = false
             button.setAccessibilityRole(.radioButton)
@@ -252,7 +254,7 @@ final class CaptureModeSelector: NSStackView {
 
     private func positionSelection(animated: Bool) {
         guard let button = selectedButton else { return }
-        let targetFrame = button.frame.insetBy(dx: 3, dy: 3)
+        let targetFrame = button.frame.insetBy(dx: selectionInset, dy: selectionInset)
         guard selection.frame != targetFrame else { return }
         let previous = selection.animation(forKey: "position") == nil
             ? selection.position : selection.presentation()?.position ?? selection.position
