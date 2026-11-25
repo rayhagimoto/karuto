@@ -27,13 +27,13 @@ struct UICursorTests {
         #expect(snapshot.accessibilityValue() as? Int == 1)
         #expect(snapshot.frame.width >= recording.intrinsicContentSize.width)
         let highlight = try #require(selector.layer?.sublayers?.first { $0.backgroundColor != nil })
-        #expect(highlight.frame == snapshot.frame)
+        #expect(highlight.frame == snapshot.frame.insetBy(dx: 3, dy: 3))
 
         recording.performClick(nil)
         #expect(controller.mode == .screenRecording)
         #expect(recording.accessibilityValue() as? Int == 1)
         #expect(snapshot.accessibilityValue() as? Int == 0)
-        #expect(highlight.frame == recording.frame)
+        #expect(highlight.frame == recording.frame.insetBy(dx: 3, dy: 3))
         #expect((highlight.animation(forKey: "position") != nil) != NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         let menu = controller.makeTimerMenu()
         #expect(menu.items.map(\.tag) == CaptureSessionPreferences.delays)
@@ -84,6 +84,38 @@ struct UICursorTests {
         #expect(!controller.capturesText)
         try key(48, shift: true)
         #expect(focused() == "Fullscreen")
+    }
+
+    @Test func toolbarShowsOverlayBindingsAndRefreshesWhenChanged() throws {
+        _ = NSApplication.shared
+        let display = CaptureDisplay(id: 74, name: "Shortcuts", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        let keymap = KeymapController(settings: AppSettings(defaults: defaults))
+        try keymap.update(action: .areaMode, binding: ShortcutBinding(keyCode: 18, modifiers: []))
+        try keymap.update(action: .openWindowCapture, binding: ShortcutBinding(keyCode: 20, modifiers: .command))
+        let controller = CaptureUIController()
+        controller.keymap = keymap
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        controller.present(catalog: CaptureCatalog(displays: [display], windows: []))
+        defer { controller.dismiss() }
+        let panel = try #require(NSApp.windows.first { $0.contentView is CaptureToolbarView && !existing.contains(ObjectIdentifier($0)) })
+        let buttons = descendants(panel.contentView).compactMap { $0 as? CaptureToolbarButton }
+        let area = try #require(buttons.first { $0.accessibilityLabel() == "Area" })
+        let window = try #require(buttons.first { $0.accessibilityLabel() == "Window" })
+        let regions = try ["Area", "Fullscreen", "Window", "Scrolling"].map { label in
+            try #require(buttons.first { $0.accessibilityLabel() == label })
+        }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        #expect(regions.allSatisfy { $0.isRegionTile && $0.frame.size == NSSize(width: 70, height: 56) })
+        #expect(regions.map { $0.frame.minX } == [0, 70, 140, 210])
+        #expect(area.shortcut == keymap.configuration.binding(for: .areaMode)?.displayString)
+        #expect(window.shortcut == nil)
+        try keymap.update(action: .areaMode, binding: ShortcutBinding(keyCode: 19, modifiers: .shift))
+        controller.refreshKeymap()
+        #expect(area.shortcut == keymap.configuration.binding(for: .areaMode)?.displayString)
+        try keymap.update(action: .areaMode, binding: nil)
+        controller.refreshKeymap()
+        #expect(area.shortcut == nil)
     }
 
     @Test func presentationSetsCrosshairWithoutMovementAndDismissRestoresArrow() throws {
