@@ -131,6 +131,13 @@ struct UICursorTests {
         panel.contentView?.layoutSubtreeIfNeeded()
         #expect(regions.allSatisfy { $0.isRegionTile && $0.frame.size == NSSize(width: 70, height: 56) })
         #expect(regions.map { $0.frame.minX } == [0, 70, 140, 210])
+        let regionSelector = try #require(descendants(panel.contentView).compactMap { $0 as? CaptureModeSelector }
+            .first { $0.accessibilityLabel() == "Area selection mode" })
+        let regionHighlight = try #require(regionSelector.layer?.sublayers?.first { $0.backgroundColor != nil })
+        #expect(regionHighlight.frame == area.frame)
+        #expect(controller.handleShortcut(.windowMode))
+        #expect(regionHighlight.frame == window.frame)
+        #expect(window.accessibilityValue() as? Int == 1)
         #expect(area.shortcut == keymap.configuration.binding(for: .areaMode)?.displayString)
         #expect(window.shortcut == nil)
         try keymap.update(action: .areaMode, binding: ShortcutBinding(keyCode: 19, modifiers: .shift))
