@@ -783,6 +783,7 @@ final class CaptureUIController: NSObject {
         tools.forEach { row.addArrangedSubview($0) }
         let cancel = CaptureToolbarButton("Cancel", symbol: "xmark") { [weak self] in self?.cancel() }
         row.addArrangedSubview(cancel)
+        (tools + [cancel]).forEach { $0.showsPressEffect = false }
         shortcutButtons[.cancelCapture] = cancel
         focusGroups = [modes, choices, tools + [cancel]]
         let message = captureLabel("", size: 11)
@@ -1074,6 +1075,7 @@ final class CaptureUIController: NSObject {
     }
 
     private func showMenu(_ menu: NSMenu, from sender: NSButton) {
+        let openedByMouse = NSApp.currentEvent?.type == .leftMouseDown || NSApp.currentEvent?.type == .leftMouseUp
         menuIsTracking = true
         menu.update()
         let anchor = sender.window?.convertToScreen(sender.convert(sender.bounds, to: nil)) ?? .zero
@@ -1085,6 +1087,10 @@ final class CaptureUIController: NSObject {
         // display space rather than being clipped below a near-bottom button.
         menu.popUp(positioning: nil, at: placement.topLeft, in: nil)
         menuIsTracking = false
+        sender.highlight(false)
+        if openedByMouse, sender.window?.firstResponder === sender {
+            sender.window?.makeFirstResponder(sender.window?.contentView)
+        }
         // Restart selection only after the menu has finished using its window.
         if pendingSourceChange {
             pendingSourceChange = false

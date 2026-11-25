@@ -51,6 +51,7 @@ final class CaptureToolbarButton: ClosureButton {
     var symbolName: String { didSet { if oldValue != symbolName { updateGlyph() } } }
     var shortcut: String? { didSet { if oldValue != shortcut { updateGlyph() } } }
     var isRegionTile = false { didSet { if oldValue != isRegionTile { updateGlyph() } } }
+    var showsPressEffect = true { didSet { if oldValue != showsPressEffect { updateGlyph() } } }
     var drawsSelection = true
     private var keyboardFocused = false
     override var state: NSControl.StateValue { didSet { if oldValue != state { updateGlyph() } } }
@@ -85,7 +86,7 @@ final class CaptureToolbarButton: ClosureButton {
     private func updateGlyph() {
         glyph.rootView = ToolbarGlyph(symbol: symbolName, shortcut: shortcut, isRegionTile: isRegionTile,
                                       selected: state == .on, drawsSelection: drawsSelection, checked: showsCheckmark && state == .on,
-                                      enabled: isEnabled, highlighted: isHighlighted, focused: keyboardFocused,
+                                      enabled: isEnabled, highlighted: isHighlighted && showsPressEffect, focused: keyboardFocused,
                                       dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         if showsCheckmark { setAccessibilityValue(state == .on ? 1 : 0) }
     }
@@ -98,7 +99,8 @@ final class CaptureToolbarButton: ClosureButton {
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted {
-            keyboardFocused = true
+            let eventType = NSApp.currentEvent?.type
+            keyboardFocused = showsPressEffect || (eventType != .leftMouseDown && eventType != .leftMouseUp)
             updateGlyph()
             focusChanged?()
         }
