@@ -904,7 +904,12 @@ final class CaptureUIController: NSObject {
         guard let toolbar, let window = event.window, window === toolbar || overlayPanels.contains(where: { $0 === window }),
               !toolbarHiddenForInk, !toolbar.ignoresMouseEvents else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let focused = window.firstResponder as? CaptureToolbarButton
+        var focused = window.firstResponder as? CaptureToolbarButton
+        if focused == nil, (window === toolbar && window.firstResponder === toolbar.contentView || overlayPanels.contains(where: { $0 === window })),
+           modifiers.isEmpty, event.keyCode == 123 || event.keyCode == 124 {
+            focusGroup(1)
+            focused = toolbar.firstResponder as? CaptureToolbarButton
+        }
         let group = focusGroups.firstIndex { buttons in buttons.contains { $0 === focused } }
         if event.keyCode == 48, modifiers.isEmpty || modifiers == [.shift] {
             let backwards = modifiers.contains(.shift)

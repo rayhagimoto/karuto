@@ -86,6 +86,29 @@ struct UICursorTests {
         #expect(focused() == "Fullscreen")
     }
 
+    @Test func arrowKeysSelectAreaModesWhenToolbarOpens() throws {
+        _ = NSApplication.shared
+        let display = CaptureDisplay(id: 75, name: "Arrow keys", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
+        let controller = CaptureUIController()
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        controller.present(catalog: CaptureCatalog(displays: [display], windows: []))
+        defer { controller.dismiss() }
+        let panel = try #require(NSApp.windows.first { $0.contentView is CaptureToolbarView && !existing.contains(ObjectIdentifier($0)) })
+        func key(_ code: UInt16) throws {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: panel.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: code))
+            #expect(controller.handleKeyEvent(event))
+        }
+        #expect(controller.selectedRegion == .area)
+        try key(124)
+        #expect(controller.selectedRegion == .fullscreen)
+        try key(123)
+        #expect(controller.selectedRegion == .area)
+        try key(123)
+        #expect(controller.selectedRegion == .scrolling)
+    }
+
     @Test func toolbarShowsOverlayBindingsAndRefreshesWhenChanged() throws {
         _ = NSApplication.shared
         let display = CaptureDisplay(id: 74, name: "Shortcuts", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
