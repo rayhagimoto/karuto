@@ -53,9 +53,9 @@ struct AutomaticScrollTests {
         let step = before.scrollStep(sourceHeight: 500, retrying: false)
         #expect(step == 133)
         progress.observe(frame(940, 0))
-        #expect(!progress.covered(step: step, since: before, sourceHeight: 500))
+        #expect(!progress.canAdvance(step: step, since: before, sourceHeight: 500, quietFor: .milliseconds(200)))
         progress.observe(frame(1300, 0))
-        #expect(progress.covered(step: step, since: before, sourceHeight: 500))
+        #expect(progress.canAdvance(step: step, since: before, sourceHeight: 500, quietFor: .milliseconds(200)))
         #expect(progress.scrollStep(sourceHeight: 500, retrying: true) == 48)
     }
 
@@ -198,8 +198,20 @@ struct AutomaticScrollTests {
         evidence.observe(frame(640, 0))
         evidence.observe(frame(640, 2))
         evidence.observe(frame(640, 1))
-        #expect(!evidence.covered(step: 40, since: before, sourceHeight: 600))
+        #expect(!evidence.canAdvance(step: 40, since: before, sourceHeight: 600, quietFor: .milliseconds(200)))
         evidence.observe(frame(640, 5))
-        #expect(evidence.covered(step: 40, since: before, sourceHeight: 600))
+        #expect(evidence.canAdvance(step: 40, since: before, sourceHeight: 600, quietFor: .milliseconds(200)))
+    }
+
+    @Test func aVerifiedStepWaitsForTheViewportToSettle() {
+        var evidence = AutomaticScrollProgress()
+        evidence.observe(StitchProgress(height: 3367, message: "", accepted: true, viewportHeight: 1075,
+                                        sourceSize: CGSize(width: 1691, height: 1075)))
+        let before = evidence
+        evidence.observe(StitchProgress(height: 3725, message: "", accepted: true, viewportHeight: 1075,
+                                        sourceSize: CGSize(width: 1691, height: 1075)))
+        #expect(!evidence.canAdvance(step: 358, since: before, sourceHeight: 1075, quietFor: .milliseconds(33)))
+        #expect(!evidence.canAdvance(step: 358, since: before, sourceHeight: 1075, quietFor: .milliseconds(50)))
+        #expect(evidence.canAdvance(step: 358, since: before, sourceHeight: 1075, quietFor: .milliseconds(200)))
     }
 }

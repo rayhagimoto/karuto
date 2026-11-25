@@ -158,8 +158,8 @@ final class ScrollCaptureDriver {
                     self.useManual("Could not send a scroll event. Continue scrolling manually.")
                     return
                 }
-                // A smooth scroll can render several partial frames. Only a verified
-                // full step releases the next large input. Use a small probe on stalls.
+                // Give the target time to redraw after verified motion before
+                // sending the next wheel event. Use a small probe on stalls.
                 let sent = clock.now
                 var lastGrowth = sent
                 var lastHeight = before.height
@@ -167,20 +167,26 @@ final class ScrollCaptureDriver {
                 let quietInterval = before.hasExtended ? timing.quietInterval : .milliseconds(750)
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                    let elapsed = sent.duration(to: clock.now)
-                    if self.progress.covered(step: step, since: before, sourceHeight: sourceHeight) {
-                        if before.hasExtended { timing.record(stepDuration: elapsed) }
-                        break
-                    }
+                    let now = clock.now
+                    let elapsed = sent.duration(to: now)
                     if self.progress.height > lastHeight {
                         lastHeight = self.progress.height
-                        lastGrowth = clock.now
+                        lastGrowth = now
                     }
-                    if before.isCalibrating, noGrowthAttempts < 3, self.progress.frameCount > before.frameCount,
+                    let quietFor = lastGrowth.duration(to: now)
+                    if self.progress.canAdvance(step: step, since: before, sourceHeight: sourceHeight, quietFor: quietFor) {
+                        await drainFrames()
+                        guard !Task.isCancelled else { return }
+                        guard self.progress.height == lastHeight, !self.progress.hasUnresolvedOverlap else { continue }
+                        if before.hasExtended { timing.record(stepDuration: sent.duration(to: lastGrowth)) }
+                        break
+                    }
+                    if before.isCalibrating, self.progress.isCalibrating, noGrowthAttempts < 3,
+                       self.progress.frameCount > before.frameCount,
                        !self.progress.hasUnresolvedOverlap, elapsed >= .milliseconds(160) { break }
                     let rejected = self.progress.hasUnresolvedOverlap
                     let settling = rejected ? max(quietInterval, .milliseconds(550)) : quietInterval
-                    if lastGrowth.duration(to: clock.now) >= settling {
+                    if quietFor >= settling {
                         // A busy stitcher can still have growth to report for this input.
                         await drainFrames()
                         if !Task.isCancelled, before.hasExtended, lastHeight == self.progress.height,
@@ -346,8 +352,8 @@ struct AutomaticScrollProgress {
         return Int32(max(1, min(step, viewport - 24 / scale)))
     }
 
-    func covered(step: Int32, since before: Self, sourceHeight: CGFloat) -> Bool {
-        guard !hasUnresolvedOverlap else { return false }
+    func canAdvance(step: Int32, since before: Self, sourceHeight: CGFloat, quietFor: Duration) -> Bool {
+        guard !hasUnresolvedOverlap, quietFor >= .milliseconds(200) else { return false }
         if before.isCalibrating { return hasExtended }
         let scale = sourcePixels > 0 ? sourcePixels / sourceHeight : 1
         return CGFloat(height - before.height) >= ceil(CGFloat(step) * scale)

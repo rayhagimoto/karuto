@@ -99,7 +99,7 @@ impl<'a> FrameView<'a> {
         &self.bytes[y * self.stride..y * self.stride + self.width * 4]
     }
     fn blank_tail(&self) -> usize {
-        // Ignore compositor edges and scrollbars, but keep any real content.
+        // Ignore compositor edges and small RGB dithering in flat fills.
         let columns = 8..(self.width - 2) * 4;
         let background = &self.row(self.height - 1)[8..12];
         (0..self.height)
@@ -107,7 +107,7 @@ impl<'a> FrameView<'a> {
             .take_while(|&y| {
                 self.row(y)[columns.clone()]
                     .chunks_exact(4)
-                    .all(|pixel| pixel == background)
+                    .all(|pixel| flat_pixels_agree(pixel, background))
             })
             .count()
     }
@@ -165,6 +165,14 @@ impl<'a> FrameView<'a> {
         }
         result
     }
+}
+
+fn flat_pixels_agree(first: &[u8], second: &[u8]) -> bool {
+    first[3] == second[3]
+        && (0..3)
+            .map(|channel| u16::from(first[channel].abs_diff(second[channel])))
+            .sum::<u16>()
+            <= 6
 }
 
 fn sample_columns(width: usize) -> impl Iterator<Item = usize> {
@@ -446,6 +454,7 @@ pub struct Session {
     previous: Option<Frame>,
     height: usize,
     pending_blank_rows: usize,
+    pending_repaint: Option<Frame>,
     started: Instant,
     finished: bool,
     failed: bool,
@@ -471,6 +480,7 @@ impl Session {
             previous: None,
             height: 0,
             pending_blank_rows: 0,
+            pending_repaint: None,
             started: Instant::now(),
             finished: false,
             failed: false,
@@ -510,6 +520,7 @@ impl Session {
                 }
                 let baseline = previous.view();
                 if signature_error(&previous.signature, &signature, 0, height, false) <= 0.5 {
+                    self.pending_repaint = None;
                     if self.rejected_overlap && baseline.shares_exact_rows(&view, 0, false) {
                         self.rejected_overlap = false;
                         return Ok(self.progress(5));
@@ -523,8 +534,9 @@ impl Session {
                     self.pending_blank_rows,
                     self.rejected_overlap,
                 ) {
-                    // Preserve the anchor until forward motion can place the
-                    // newly visible pixels in the stitched document.
+                    // Keep both views at this position until the next scroll
+                    // confirms whether the newly rendered rows move with it.
+                    self.pending_repaint = Some(Frame::from_view(&view, signature));
                     let disposition = if self.rejected_overlap { 5 } else { 1 };
                     self.rejected_overlap = false;
                     return Ok(self.progress(disposition));
@@ -542,6 +554,30 @@ impl Session {
                     })
                     .map(|shift| (shift, false))
                     .or_else(|| {
+                        let repaint = self.pending_repaint.as_ref()?;
+                        let repainted = repaint.view();
+                        matching_displacement(
+                            &repainted,
+                            &repaint.signature,
+                            &view,
+                            &signature,
+                            (height / 3).max(24),
+                            false,
+                        )
+                        .filter(|&shift| {
+                            // Require matching detail in the filled area itself
+                            // so a stationary overlay cannot anchor the move.
+                            let start = (height - self.pending_blank_rows).max(shift);
+                            pixel_match(
+                                &repainted.below(start),
+                                &view.below(start - shift),
+                                0,
+                                false,
+                            )
+                        })
+                        .map(|shift| (shift, true))
+                    })
+                    .or_else(|| {
                         displacement_before_blank_tail(
                             previous,
                             &view,
@@ -554,6 +590,7 @@ impl Session {
                 match matched {
                     Some(delta) => delta,
                     None => {
+                        self.pending_repaint = None;
                         self.rejected_overlap = true;
                         return Ok(self.progress(2));
                     }
@@ -574,21 +611,31 @@ impl Session {
         // either fills it in or moves it out of sight. The file is append-only.
         let replacement = Frame::from_view(&view, signature);
         let row_bytes = width * 4;
-        let mut replaceable = self.pending_blank_rows.min(height - added);
-        if !backfill && let Some(previous) = &self.previous {
-            let baseline = previous.view();
-            // With ordinary alignment, carry forward identical blank rows and
-            // keep the original pixels wherever the two views differ.
-            replaceable = (height - replaceable..height)
-                .rev()
-                .take_while(|&y| baseline.row(y) == view.row(y - added))
-                .count();
-        }
-        let pending = if self.match_options.repaint {
-            view.blank_tail().min(added + replaceable)
+        let blank = if self.match_options.repaint {
+            view.blank_tail()
         } else {
             0
         };
+        let mut replaceable = self.pending_blank_rows.min(height - added);
+        if !backfill && let Some(previous) = &self.previous {
+            let baseline = previous.view();
+            // Keep provisional flat rows across compositor color variations.
+            // Once a row has visible detail, require agreement as before.
+            replaceable = (height - replaceable..height)
+                .rev()
+                .take_while(|&y| {
+                    let old = baseline.row(y);
+                    let new = view.row(y - added);
+                    old == new
+                        || (y - added >= height - blank
+                            && old
+                                .chunks_exact(4)
+                                .zip(new.chunks_exact(4))
+                                .all(|(a, b)| flat_pixels_agree(a, b)))
+                })
+                .count();
+        }
+        let pending = blank.min(added + replaceable);
         let old_bytes = ((self.height - self.pending_blank_rows) * row_bytes) as u64;
         let written = (|| -> std::io::Result<()> {
             self.file.seek(SeekFrom::Start(old_bytes))?;
@@ -614,6 +661,7 @@ impl Session {
         self.rejected_overlap = false;
         self.height = new_height;
         self.pending_blank_rows = pending;
+        self.pending_repaint = None;
         Ok(self.progress(0))
     }
     pub fn finish(&mut self, destination: &Path) -> Result<Progress> {
@@ -650,7 +698,9 @@ impl Session {
                 .create_new(true)
                 .open(&temporary)
                 .map_err(|e| e.to_string())?;
-            let tail = &previous.pixels[(previous.height - self.pending_blank_rows) * width * 4..];
+            let final_view = self.pending_repaint.as_ref().unwrap_or(previous);
+            let tail =
+                &final_view.pixels[(final_view.height - self.pending_blank_rows) * width * 4..];
             png::encode(
                 &mut (&mut self.file).chain(tail),
                 &mut output,

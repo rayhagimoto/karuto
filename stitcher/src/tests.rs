@@ -187,7 +187,7 @@ fn late_content_replaces_provisional_blank_rows_without_skipping_overlap() {
 }
 
 #[test]
-fn late_render_without_motion_does_not_interrupt_scrolling() {
+fn late_render_into_a_dithered_blank_area_does_not_interrupt_scrolling() {
     let dir = TestDirectory::new();
     let mut session = Session::new(&dir.0).unwrap();
     session.match_options = MatchOptions::CALIBRATED;
@@ -195,7 +195,12 @@ fn late_render_without_motion_does_not_interrupt_scrolling() {
     let stride = width * 4;
     let document = pixels(width, height + shift, 0, 0);
     let mut initial = document[..height * stride].to_vec();
-    initial[populated * stride..].fill(0xff);
+    for (index, pixel) in initial[populated * stride..]
+        .chunks_exact_mut(4)
+        .enumerate()
+    {
+        pixel.copy_from_slice(&[[20, 21, 20, 255], [21, 19, 20, 255]][index % 2]);
+    }
     session.append(&initial, width, height, stride).unwrap();
 
     let repaint = session
@@ -215,6 +220,49 @@ fn late_render_without_motion_does_not_interrupt_scrolling() {
     assert!(
         actual == document,
         "the stationary redraw must not add or duplicate rows"
+    );
+}
+
+#[test]
+fn verified_stationary_repaint_can_anchor_the_next_scroll() {
+    let dir = TestDirectory::new();
+    let mut session = Session::new(&dir.0).unwrap();
+    session.match_options = MatchOptions::CALIBRATED;
+    let (width, height, first_shift, next_shift, rendered) = (192, 420, 120, 150, 346);
+    let stride = width * 4;
+    let document = pixels(width, height + first_shift + next_shift, 0, 0);
+    let viewport = |offset: usize| &document[offset * stride..(offset + height) * stride];
+    for (offset, fill) in [(0, 20), (first_shift, 22)] {
+        let mut loading = viewport(offset).to_vec();
+        for pixel in loading[(rendered - offset) * stride..].chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[fill, fill, fill, 255]);
+        }
+        let progress = session.append(&loading, width, height, stride).unwrap();
+        assert_eq!(
+            (progress.disposition, progress.height),
+            (0, (height + offset) as u32)
+        );
+    }
+    let repaint = session
+        .append(viewport(first_shift), width, height, stride)
+        .unwrap();
+    assert_eq!(
+        (repaint.disposition, repaint.height),
+        (1, (height + first_shift) as u32)
+    );
+    let moved = session
+        .append(viewport(first_shift + next_shift), width, height, stride)
+        .unwrap();
+    assert_eq!(
+        (moved.disposition, moved.height),
+        (0, (height + first_shift + next_shift) as u32)
+    );
+    let output = dir.0.join("repaint-anchor.png");
+    session.finish(&output).unwrap();
+    let (_, _, actual) = decode_png(&output);
+    assert!(
+        actual == document,
+        "the repaint must fill the earlier blank rows exactly once"
     );
 }
 
@@ -245,6 +293,30 @@ fn finalizing_with_provisional_rows_keeps_the_accepted_blank_tail() {
     session.finish(&output).unwrap();
     let (_, _, actual) = decode_png(&output);
     assert!(actual == initial);
+}
+
+#[test]
+fn final_viewport_keeps_content_rendered_at_rest() {
+    let dir = TestDirectory::new();
+    let (width, height, populated) = (96, 144, 102);
+    let stride = width * 4;
+    let document = pixels(width, height, 0, 0);
+    let mut initial = document.clone();
+    initial[populated * stride..].fill(0xff);
+    for restored in [false, true] {
+        let mut session = Session::new(&dir.0).unwrap();
+        session.match_options = MatchOptions::CALIBRATED;
+        session.append(&initial, width, height, stride).unwrap();
+        let repaint = session.append(&document, width, height, stride).unwrap();
+        assert_eq!((repaint.disposition, repaint.height), (1, height as u32));
+        if restored {
+            session.append(&initial, width, height, stride).unwrap();
+        }
+        let output = dir.0.join(format!("final-{restored}.png"));
+        session.finish(&output).unwrap();
+        let (_, _, actual) = decode_png(&output);
+        assert!(actual == if restored { &initial } else { &document }.as_slice());
+    }
 }
 
 #[test]
