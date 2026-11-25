@@ -289,6 +289,25 @@ struct UIAreaInteractionTests {
         #expect(editor.marks.isEmpty)
     }
 
+    @Test func previousRegionButtonRestoresAnAreaFromFullscreen() throws {
+        let fixture = Fixture(showsToolbar: true)
+        defer { fixture.controller.dismiss() }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let buttons = NSApp.windows.compactMap(\.contentView).filter { $0 is CaptureToolbarView }
+            .flatMap(descendants).compactMap { $0 as? CaptureToolbarButton }
+        let recall = try #require(buttons.first { $0.accessibilityLabel() == "Select Last Capture Region" })
+        #expect(!recall.isEnabled)
+        let target = CaptureTarget.area(displayID: 41, rect: CGRect(x: -880, y: 330, width: 320, height: 220))
+        fixture.controller.previousArea = { (target, fixture.window.frame) }
+        fixture.controller.setRegion(.fullscreen)
+        #expect(recall.isEnabled)
+        recall.performClick(nil)
+        #expect(fixture.controller.selectedRegion == .area)
+        #expect(fixture.captures.isEmpty)
+        #expect(fixture.controller.handleShortcut(.confirmCapture))
+        #expect(fixture.captures.first?.1 == target)
+    }
+
     @Test func lastRegionIsStagedOnDemandEvenWithInstantCapture() {
         let fixture = Fixture(showsToolbar: true)
         defer { fixture.controller.dismiss() }

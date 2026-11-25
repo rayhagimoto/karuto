@@ -171,29 +171,26 @@ struct TextCaptureTests {
         #expect(copies == 0)
     }
 
-    @Test func OCRToolbarKeepsItsPositionWithoutAConfirmationButton() throws {
+    @Test func OCRControlLivesInSelectionPalette() throws {
         _ = NSApplication.shared
-        let ui = CaptureUIController()
+        let editor = AreaAnnotationEditor()
         let display = CaptureDisplay(id: 41, name: "Test", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2)
-        ui.present(catalog: CaptureCatalog(displays: [display], windows: []))
-        defer { ui.dismiss() }
+        var toggles = 0
+        editor.onToggleOCR = { toggles += 1 }
+        editor.show(for: display, rect: CGRect(x: 100, y: 100, width: 300, height: 200), in: CALayer(), avoiding: .zero)
+        defer { editor.clear() }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        let buttons = NSApp.windows.filter(\.isVisible).compactMap(\.contentView).filter { $0 is CaptureToolbarView }
-            .flatMap(descendants).compactMap { $0 as? CaptureToolbarButton }
+        let panel = try #require(NSApp.windows.first { $0.accessibilityLabel() == "Area annotation tools" && $0.isVisible })
+        let buttons = try #require(panel.contentView).subviews.flatMap(descendants).compactMap { $0 as? CaptureActionButton }
         let button = try #require(buttons.first { $0.accessibilityLabel() == "Recognize text" })
-        button.window?.contentView?.layoutSubtreeIfNeeded()
-        let frame = button.convert(button.bounds, to: nil)
-        for enabled in [true, false] {
-            ui.ocrEnabled = enabled
-            button.window?.contentView?.layoutSubtreeIfNeeded()
-            #expect(button.symbolName == "text.viewfinder")
-            #expect(button.state == (enabled ? .on : .off))
-            #expect(!buttons.contains { ["Capture", "Copy All Text", "Continue"].contains($0.accessibilityLabel() ?? "") })
-            #expect(button.convert(button.bounds, to: nil) == frame)
-        }
-        ui.setRegion(.scrolling)
-        #expect(!button.isEnabled)
-        #expect(!button.isHidden)
+        button.performClick(nil)
+        #expect(toggles == 1)
+        editor.ocrEnabled = true
+        #expect(button.state == .on)
+        #expect(button.isEnabled)
+        #expect(buttons.first { $0.accessibilityLabel() == "Pen" }?.isEnabled == false)
+        editor.ocrEnabled = false
+        #expect(button.state == .off)
     }
 
     @Test func OCRIsIndependentOfTargetAndUnavailableForOtherModes() {

@@ -5,7 +5,7 @@ import CoreGraphics
 final class CaptureUIController: NSObject {
     var onCapture: ((CaptureMode, CaptureRegion, CaptureTarget, [AreaAnnotation], SnapshotDestination) -> Void)?
     let editor = AreaAnnotationEditor()
-    var previousArea: (() -> (CaptureTarget, CGRect)?)?
+    var previousArea: (() -> (CaptureTarget, CGRect)?)? { didSet { updateToolbar() } }
     private var stageAreaForEditing = false
     private var captureOnRelease: Bool { instantCapture && !stageAreaForEditing && !capturesText }
     private var canChooseSnapshotDestination: Bool {
@@ -59,7 +59,6 @@ final class CaptureUIController: NSObject {
         if capturesText { return "Copy All Text" }
         return mode == .screenRecording || region == .scrolling ? "Continue" : "Capture"
     }
-    private var ocrButton: CaptureToolbarButton?
     private var annotateButton: CaptureToolbarButton?
     var selectedRegion: CaptureRegion { region }
     private var menuIsTracking = false
@@ -87,6 +86,7 @@ final class CaptureUIController: NSObject {
     private var toolbarRevealTask: Task<Void, Never>?
     private var lastToolbarFrame: CGRect?
     private var regionButtons: [CaptureRegion: CaptureToolbarButton] = [:]
+    private var recallButton: CaptureToolbarButton?
     private let sizeControl = SelectionSizeControl()
     private var modeControl: CaptureModeSelector?
     private var timerControl: CaptureToolbarButton?
@@ -107,6 +107,11 @@ final class CaptureUIController: NSObject {
             focusGroup(backwards ? focusGroups.count - 1 : 0)
         }
         editor.onConfirm = { [weak self] in self?.confirm() }
+        editor.onToggleOCR = { [weak self] in
+            guard let self else { return }
+            stageAreaForEditing = true
+            handleShortcut(.toggleOCR)
+        }
         editor.presentMenu = { [weak self] menu, button in self?.showMenu(menu, from: button) }
         editor.onSelectTool = { [weak self] tool in
             guard let self else { return }
@@ -261,12 +266,12 @@ final class CaptureUIController: NSObject {
         overlays.forEach { $0.cancelInteraction(); $0.releaseFrozenFrame(); $0.controller = nil }
         overlays.removeAll()
         regionButtons.removeAll()
+        recallButton = nil
         focusGroups.removeAll()
         shortcutButtons.removeAll()
         modeControl = nil
         timerControl = nil
         annotateButton = nil
-        ocrButton = nil
         hint = nil
         NSCursor.arrow.set()
     }
@@ -538,9 +543,8 @@ final class CaptureUIController: NSObject {
     fileprivate func refreshSelection() {
         let rect = drawSelection()
         updateTextPreviews(rect: rect)
-        if capturesText {
-            editor.hideDuringAdjustment()
-        } else if mode == .snapshot, region == .area, !captureOnRelease,
+        editor.ocrEnabled = capturesText
+        if mode == .snapshot, region == .area, !captureOnRelease,
            case .area(let id, let area) = target,
            let overlay = overlays.first(where: { $0.display.id == id }), let root = overlay.layer {
             editor.show(for: overlay.display, rect: area, in: root, avoiding: toolbar?.frame)
@@ -636,14 +640,16 @@ final class CaptureUIController: NSObject {
         refreshSelection()
     }
 
+    private var validPreviousArea: CaptureTarget? {
+        guard let (previous, frame) = previousArea?(), case .area(let id, let rect) = previous,
+              catalog.displays.contains(where: { $0.id == id && $0.frame == frame && frame.contains(rect) }) else { return nil }
+        return previous
+    }
+
     private func updateToolbar() {
+        recallButton?.isEnabled = mode == .snapshot && validPreviousArea != nil
         annotateButton?.isEnabled = (mode == .snapshot && region == .area && instantCapture && !capturesText)
         annotateButton?.state = stageAreaForEditing ? .on : .off
-        ocrButton?.isEnabled = supportsOCR
-        ocrButton?.state = capturesText ? .on : .off
-        ocrButton?.focusHint = supportsOCR
-            ? shortcutLabel("Recognize text", action: .toggleOCR)
-            : "Recognize text is available for Area, Fullscreen, and Window snapshots."
         let confirmation = keymap?.configuration.binding(for: .confirmCapture).map { "\($0.displayString) to \(confirmTitle.lowercased())" }
             ?? "Choose \(confirmTitle) in Capture options"
         var shortcuts: [String] = []
@@ -690,7 +696,7 @@ final class CaptureUIController: NSObject {
 
     private func makeToolbar(on display: CaptureDisplay) {
         let dividerPadding: CGFloat = 4
-        let width = min(449 + 6 * dividerPadding, display.frame.width - 16)
+        let width = min(486 + 6 * dividerPadding, display.frame.width - 16)
         let panel = CapturePanel(contentRect: CGRect(x: display.frame.midX - width / 2, y: display.frame.minY + 55, width: width, height: 66), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
         let visibleFrame = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.id })?.visibleFrame ?? display.frame
         if let previous = lastToolbarFrame, display.frame.contains(CGPoint(x: previous.midX, y: previous.midY)) {
@@ -745,19 +751,26 @@ final class CaptureUIController: NSObject {
             (.area, "viewfinder", .areaMode), (.fullscreen, "display", .fullscreenMode),
             (.window, "macwindow", .windowMode), (.scrolling, "computermouse", .scrollingMode)
         ]
-        let choices = regions.map { region, symbol, action in
+        var choices: [CaptureToolbarButton] = []
+        for (region, symbol, action) in regions {
             let button = CaptureToolbarButton(region.title, symbol: symbol) { [weak self] in self?.setRegion(region) }
             button.setAccessibilityRole(.radioButton)
             row.addArrangedSubview(button)
             regionButtons[region] = button
             shortcutButtons[action] = button
-            return button
+            choices.append(button)
+            if region == .fullscreen {
+                let recall = CaptureToolbarButton("Select Last Capture Region", symbol: "arrow.uturn.backward.square") { [weak self] in
+                    self?.handleShortcut(.selectLastArea)
+                }
+                recall.drawsSelection = false
+                row.addArrangedSubview(recall)
+                choices.append(recall)
+                recallButton = recall
+                shortcutButtons[.selectLastArea] = recall
+            }
         }
         divider()
-        let ocr = CaptureToolbarButton("Recognize text", symbol: "text.viewfinder", checked: true) { [weak self] in
-            self?.handleShortcut(.toggleOCR)
-        }
-        ocrButton = ocr
         let timer = CaptureToolbarButton("Capture timer", symbol: "clock")
         timer.handler = { [weak self, weak timer] in
             guard let self, let timer else { return }
@@ -776,7 +789,7 @@ final class CaptureUIController: NSObject {
             guard let self, let options else { return }
             showMenu(makeOptionsMenu(), from: options)
         }
-        let tools = [ocr, timer, annotate, options]
+        let tools = [timer, annotate, options]
         tools.forEach { row.addArrangedSubview($0) }
         divider()
         let cancel = CaptureToolbarButton("Cancel", symbol: "xmark") { [weak self] in self?.cancel() }
@@ -928,10 +941,9 @@ final class CaptureUIController: NSObject {
         guard !menuIsTracking else { return false }
         switch action {
         case .selectLastArea:
-            guard mode == .snapshot, region == .area,
-                  let (previous, frame) = previousArea?(), case .area(let id, let rect) = previous,
-                  catalog.displays.contains(where: { $0.id == id && $0.frame == frame && frame.contains(rect) }) else { return false }
-            resetSelection()
+            guard mode == .snapshot, let previous = validPreviousArea else { return false }
+            if region != .area { setRegion(.area) }
+            else { resetSelection() }
             stageAreaForEditing = true
             target = previous
             overlays.forEach { updateAccessibilityHelp(for: $0) }

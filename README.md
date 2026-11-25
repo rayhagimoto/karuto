@@ -12,9 +12,9 @@ A lightweight, local-first capture utility for macOS. Capture screenshots, recor
 
 Press **Control–Shift–2** to open the toolbar. Capture a window or display, drag out an area, or click a suggested window outline. After you release the mouse, the selection shows its width and height in points. Click either value to resize precisely.
 
-![Karuto’s icon-focused capture toolbar in light appearance](docs/ui-evidence/capture-toolbar-compact-light.png)
+![Karuto’s capture toolbar with Area selected and a trail map outlined for capture](docs/ui-evidence/capture-toolbar-compact-dark.png)
 
-The translucent toolbar groups Snapshot and Screen Recording, capture regions, and tools. Choose Area, Fullscreen, Window, or Scrolling with the region icons. The Scrolling icon shows a mouse with up and down arrows. The remaining icons toggle text recognition, choose a timer, stage an area for annotation, open capture options, and cancel. Selected modes use a subtle highlight, and enabled toggles show a checkmark. Hover over any icon to see its name.
+The translucent toolbar groups Snapshot and Screen Recording, capture regions, and tools. Choose Area, Fullscreen, Window, or Scrolling with the region icons. Use the previous-region button beside Fullscreen to select the last captured rectangle for adjustment. The Scrolling icon shows a mouse with up and down arrows. The remaining icons choose a timer, stage an area for annotation, open capture options, and cancel. Selected modes use a subtle highlight, and enabled toggles show a checkmark. Hover over any icon to see its name.
 
 Use **Tab** and **Shift–Tab** to move between toolbar groups and available dimension fields. Use the **Left** and **Right** arrows to change a mode or region, or move between tools. Press **Space** to activate the focused control. The toolbar shows context and configured shortcut hints beneath the icons. Drag anywhere on the toolbar to reposition it.
 
@@ -33,13 +33,13 @@ Copy and Save are available with Instant Capture off. Turn **Instant Capture** o
 
 Draw with the pen, highlighter, arrow, rectangle, or ellipse. Use numbered circles to mark steps and Mosaic to pixelate detail. Drag a text box to move it, resize it by a handle, or double-click to edit its text, size, alignment, and styling. **Escape** finishes text editing and leaves the box selected. **Shift–Return** inserts a line break. Undo and redo with **Command–Z** and **Command–Shift–Z**.
 
-![Editing a map annotation with numbered callouts, a pixelated field, and the text formatting panel open](docs/ui-evidence/area-annotations.png)
+![Trail map with numbered callouts, a pixelated field, and the text formatting panel open](docs/ui-evidence/area-annotations.png)
 
 ### Copy text directly from the screen
 
-Press **O** or click the text-viewfinder icon to highlight recognizable text in an area, window, or display. A checkmark indicates that text recognition is on. Double-click a word to copy it, drag across a passage and press **Command–C**, or press **Return** to copy all recognized text. The overlay stays open, so you can copy another passage without taking a screenshot. Requires a Mac with Live Text support.
+Press **O** to highlight recognizable text in an area, window, or display. For an area selection, click the text-viewfinder icon in the selection toolbar to toggle recognition. The highlighted icon indicates that text recognition is on. Double-click a word to copy it, drag across a passage and press **Command–C**, or press **Return** to copy all recognized text. The overlay stays open, so you can copy another passage without taking a screenshot. Requires a Mac with Live Text support.
 
-![Live Text highlighting route notes with “Alder Ridge” selected in the capture overlay](docs/ui-evidence/inline-ocr.png)
+![Live Text highlighting the trail guide with Alder Ridge selected and text recognition active in the selection toolbar](docs/ui-evidence/inline-ocr.png)
 
 ### Capture a scrolling page
 

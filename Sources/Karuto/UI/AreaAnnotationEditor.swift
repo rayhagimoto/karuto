@@ -6,6 +6,8 @@ import AppKit
 final class AreaAnnotationEditor: NSObject {
     var sampleImage: ((CaptureTarget) async throws -> CGImage)?
     var onConfirm: (() -> Void)?
+    var onToggleOCR: (() -> Void)?
+    var ocrEnabled = false { didSet { syncButtons() } }
     var onSelectTool: ((AnnotationTool) -> Void)?
     var presentMenu: ((NSMenu, NSButton) -> Void)?
     private(set) var tool = AnnotationTool.select
@@ -35,6 +37,7 @@ final class AreaAnnotationEditor: NSObject {
     private var palette: CapturePanel?
     private var movedPalette = false
     private var buttons: [AnnotationTool: CaptureActionButton] = [:]
+    private var ocrButton: CaptureActionButton?
     private var undoButton: CaptureActionButton?
     private var redoButton: CaptureActionButton?
     private var colorButton: CaptureActionButton?
@@ -382,6 +385,7 @@ final class AreaAnnotationEditor: NSObject {
         for tool in AnnotationTool.allCases {
             buttons[tool] = button(tool.rawValue, tool.symbol) { [weak self] in self?.select(tool) }
         }
+        ocrButton = button("Recognize text", "text.viewfinder") { [weak self] in self?.onToggleOCR?() }
         colorButton = button("Ink color", "circle.fill") { [weak self] in self?.chooseColor() }
         undoButton = button("Undo annotation", "arrow.uturn.backward") { [weak self] in self?.undo() }
         redoButton = button("Redo annotation", "arrow.uturn.forward") { [weak self] in self?.redo() }
@@ -402,11 +406,15 @@ final class AreaAnnotationEditor: NSObject {
 
     private func syncButtons() {
         for (key, b) in buttons {
+            b.isEnabled = !ocrEnabled
             b.state = key == tool ? .on : .off
             b.setAccessibilityValue(key == tool ? 1 : 0)
         }
-        undoButton?.isEnabled = canUndo
-        redoButton?.isEnabled = !undone.isEmpty
+        ocrButton?.state = ocrEnabled ? .on : .off
+        ocrButton?.setAccessibilityValue(ocrEnabled ? 1 : 0)
+        undoButton?.isEnabled = !ocrEnabled && canUndo
+        redoButton?.isEnabled = !ocrEnabled && !undone.isEmpty
+        colorButton?.isEnabled = !ocrEnabled
         colorButton?.contentTintColor = NSColor(cgColor: color.cgColor)
         colorButton?.setAccessibilityValue(color.rawValue.capitalized)
     }
