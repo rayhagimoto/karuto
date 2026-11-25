@@ -12,7 +12,7 @@ A lightweight, local-first capture utility for macOS. Capture screenshots, recor
 
 Press **Control–Shift–2** to open the toolbar. Capture a window or display, drag out an area, or click a suggested window outline. After you release the mouse, the selection shows its width and height in points. Click either value to resize precisely.
 
-![Karuto’s capture toolbar with Area selected and a trail map outlined for capture](docs/ui-evidence/capture-toolbar-compact-dark.png)
+![Karuto’s capture toolbar with Area selected and a trail map outlined for capture](assets/screenshots/capture-toolbar-compact-dark.png)
 
 The translucent toolbar groups Snapshot and Screen Recording, capture regions, and tools. Choose Area, Fullscreen, Window, or Scrolling with the region icons. Use the previous-region button beside Fullscreen to select the last captured rectangle for adjustment. The Scrolling icon shows a mouse with up and down arrows. The remaining icons choose a timer, stage an area for annotation, open capture options, and cancel. Selected modes use a subtle highlight, and enabled toggles show a checkmark. Hover over any icon to see its name.
 
@@ -33,33 +33,33 @@ Copy and Save are available with Instant Capture off. Turn **Instant Capture** o
 
 Draw with the pen, highlighter, arrow, rectangle, or ellipse. Use numbered circles to mark steps and Mosaic to pixelate detail. Drag a text box to move it, resize it by a handle, or double-click to edit its text, size, alignment, and styling. **Escape** finishes text editing and leaves the box selected. **Shift–Return** inserts a line break. Undo and redo with **Command–Z** and **Command–Shift–Z**.
 
-![Trail map with numbered callouts, a pixelated field, and the text formatting panel open](docs/ui-evidence/area-annotations.png)
+![Trail map with numbered callouts, a pixelated field, and the text formatting panel open](assets/screenshots/area-annotations.png)
 
 ### Copy text directly from the screen
 
 Press **O** to highlight recognizable text in an area, window, or display. For an area selection, click the text-viewfinder icon in the selection toolbar to toggle recognition. The highlighted icon indicates that text recognition is on. Double-click a word to copy it, drag across a passage and press **Command–C**, or press **Return** to copy all recognized text. The overlay stays open, so you can copy another passage without taking a screenshot. Requires a Mac with Live Text support.
 
-![Live Text highlighting the trail guide with Alder Ridge selected and text recognition active in the selection toolbar](docs/ui-evidence/inline-ocr.png)
+![Live Text highlighting the trail guide with Alder Ridge selected and text recognition active in the selection toolbar](assets/screenshots/inline-ocr.png)
 
 ### Capture a scrolling page
 
 Choose the mouse-and-arrows **Scrolling** icon, select a pane in a browser or Mac app, and let Karuto scroll downward. You can move the pointer outside the pane during automatic capture. Keep its window visible and frontmost. It checks which content moves, outlines the verified region, and stitches overlapping frames into one PNG. Choose **Scroll Manually** to use your trackpad, mouse wheel, or Up and Down arrow keys. Scroll down to add content, then choose **Finish**. If Karuto can’t verify a single moving pane, choose **Adjust Area**. With macOS Accessibility access, Karuto directs arrow keys to the selected pane and paces fast wheel or trackpad input as frames arrive. Automatic scrolling and pane suggestions also use this access.
 
-![Scrolling capture showing the verified portion of a trail guide, the stitched height, and the Finish and Scroll Manually controls](docs/ui-evidence/scrolling-capture.png)
+![Scrolling capture showing the verified portion of a trail guide, the stitched height, and the Finish and Scroll Manually controls](assets/screenshots/scrolling-capture.png)
 
-[Open the full stitched guide (PNG)](docs/ui-evidence/scrolling-result.png)
+[Open the full stitched guide (PNG)](assets/screenshots/scrolling-result.png)
 
 ### Record the screen
 
 Record an area, window, or display to H.264 MP4. Pick **30, 60, or 120 fps** in Recording settings or before you start. The default is 30 fps. Choose 1080p or native resolution, then select the pointer, system audio, and microphone independently. Completed recordings go to the Save folder.
 
-<img src="docs/ui-evidence/recording-setup.png" width="480" alt="Karuto’s recording setup with 1080p, 120 fps, system audio, and the pointer selected">
+<img src="assets/screenshots/recording-setup.png" width="480" alt="Karuto’s recording setup with 1080p, 120 fps, system audio, and the pointer selected">
 
 ### Use the capture preview
 
 Copy, save, reveal, or trash a screenshot from its corner preview. Drag a capture into another app or open a recording in your default player. Settings control how long previews stay visible, whether screenshots and scrolling screenshots save automatically, and whether they copy to the clipboard. Scrolling screenshots save automatically by default.
 
-<img src="docs/ui-evidence/result-preview.png" width="308" alt="Corner preview of an annotated map with its PNG dimensions, file size, and action buttons">
+<img src="assets/screenshots/result-preview.png" width="308" alt="Corner preview of an annotated map with its PNG dimensions, file size, and action buttons">
 
 ### Customize Karuto
 
@@ -67,7 +67,7 @@ Choose an appearance and app icon, assign or clear shortcuts, and configure laun
 
 | Appearance | Keyboard shortcuts |
 | --- | --- |
-| [![Appearance settings for the app and its icon](docs/ui-evidence/settings-appearance-current.png)](docs/ui-evidence/settings-appearance-current.png) | [![Settings for recording and clearing Karuto’s keyboard shortcuts](docs/ui-evidence/settings-shortcuts-current.png)](docs/ui-evidence/settings-shortcuts-current.png) |
+| [![Appearance settings for the app and its icon](assets/screenshots/settings-appearance-current.png)](assets/screenshots/settings-appearance-current.png) | [![Settings for recording and clearing Karuto’s keyboard shortcuts](assets/screenshots/settings-shortcuts-current.png)](assets/screenshots/settings-shortcuts-current.png) |
 
 ## Credits
 
@@ -133,6 +133,6 @@ Run the test suite with:
 bash scripts/test.sh
 ```
 
-See the [architecture](docs/agents/architecture.md), [keymap](docs/keymap.md), [alpha validation](docs/alpha-validation.md), and [memory measurements](docs/memory-performance.md) for implementation and testing details.
+See the [developer guide](docs/README.md) for the code organization and development workflow.
 
 When publishing a compiled app, offer the complete source used to build it, including the build scripts, alongside the download. For a release built from an unmodified Git tag, link to that tag’s source archive.

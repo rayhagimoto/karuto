@@ -1,6 +1,6 @@
 # Keyboard configuration and capture preferences
 
-[Project](../README.md) · [Architecture](agents/architecture.md) · [Validation](alpha-validation.md)
+[Project](../README.md) · [Developer guide](README.md)
 
 ## Capture mode preferences
 
