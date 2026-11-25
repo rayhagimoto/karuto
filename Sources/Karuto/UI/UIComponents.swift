@@ -48,9 +48,11 @@ final class CaptureToolbarButton: ClosureButton {
     let showsCheckmark: Bool
     var focusHint: String
     var focusChanged: (() -> Void)?
+    fileprivate var showSelectionFocus: ((Bool) -> Void)?
     var symbolName: String { didSet { if oldValue != symbolName { updateGlyph() } } }
     var shortcut: String? { didSet { if oldValue != shortcut { updateGlyph() } } }
     var isRegionTile = false { didSet { if oldValue != isRegionTile { updateGlyph() } } }
+    var symbolScale: CGFloat = 1 { didSet { if oldValue != symbolScale { updateGlyph() } } }
     var showsPressEffect = true { didSet { if oldValue != showsPressEffect { updateGlyph() } } }
     var drawsSelection = true
     private var keyboardFocused = false
@@ -87,7 +89,8 @@ final class CaptureToolbarButton: ClosureButton {
         glyph.rootView = ToolbarGlyph(symbol: symbolName, shortcut: shortcut, isRegionTile: isRegionTile,
                                       selected: state == .on, drawsSelection: drawsSelection, checked: showsCheckmark && state == .on,
                                       enabled: isEnabled, highlighted: isHighlighted && showsPressEffect, focused: keyboardFocused,
-                                      dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+                                      dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+                                      symbolScale: symbolScale)
         if showsCheckmark { setAccessibilityValue(state == .on ? 1 : 0) }
     }
 
@@ -100,8 +103,7 @@ final class CaptureToolbarButton: ClosureButton {
         let accepted = super.becomeFirstResponder()
         if accepted {
             let eventType = NSApp.currentEvent?.type
-            keyboardFocused = showsPressEffect || (eventType != .leftMouseDown && eventType != .leftMouseUp)
-            updateGlyph()
+            showKeyboardFocus(showsPressEffect || (eventType != .leftMouseDown && eventType != .leftMouseUp))
             focusChanged?()
         }
         return accepted
@@ -110,11 +112,17 @@ final class CaptureToolbarButton: ClosureButton {
     override func draw(_ dirtyRect: NSRect) {}
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned {
-            keyboardFocused = false
+        if resigned { showKeyboardFocus(false) }
+        return resigned
+    }
+
+    private func showKeyboardFocus(_ focused: Bool) {
+        if let showSelectionFocus {
+            showSelectionFocus(focused)
+        } else {
+            keyboardFocused = focused
             updateGlyph()
         }
-        return resigned
     }
 }
 
@@ -129,6 +137,7 @@ private struct ToolbarGlyph: View {
     var highlighted = false
     var focused = false
     var dark = false
+    var symbolScale: CGFloat = 1
 
     // Layer-backed symbols inside native glass need a foreground resolved
     // against the host appearance, including when SwiftUI redraws a toggle.
@@ -141,41 +150,43 @@ private struct ToolbarGlyph: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: isRegionTile ? 25 : 17, weight: .regular))
+            .font(.system(size: (isRegionTile ? 20 : 17) * symbolScale, weight: .regular))
             .overlay(alignment: .bottomTrailing) {
                 if checked {
                     Image(systemName: "checkmark.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(dark ? Color.black : Color.white, ink)
-                        .font(.system(size: 10, weight: .bold))
-                        .offset(x: 5, y: 4)
+                        .font(.system(size: 10 * symbolScale, weight: .bold))
+                        .offset(x: 5 * symbolScale, y: 4 * symbolScale)
                 }
             }
             .overlay(alignment: .trailing) {
                 if symbol == "computermouse" {
                     Image(systemName: "arrow.up.and.down")
-                        .font(.system(size: 10, weight: .medium))
-                        .offset(x: 9)
+                        .font(.system(size: 10 * symbolScale, weight: .medium))
+                        .offset(x: 9 * symbolScale)
                 }
             }
             .overlay(alignment: .bottom) {
                 if isRegionTile && symbol == "doc.text" {
                     Image(systemName: "arrow.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .offset(y: 7)
+                        .font(.system(size: 10 * symbolScale, weight: .semibold))
+                        .offset(y: 5 * symbolScale)
                 }
             }
         .foregroundStyle(ink.opacity(selected || focused ? 1 : 0.78))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .fixedSize()
+        .scaleEffect(1 / symbolScale)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .overlay(alignment: .topLeading) {
             if let shortcut {
                 Text(shortcut)
-                    .font(.system(size: isRegionTile ? 10 : 8, weight: .medium))
+                    .font(.system(size: isRegionTile ? 9 : 8, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .foregroundStyle(ink.opacity(0.25))
                     .padding(.leading, isRegionTile ? 7 : 2)
-                    .padding(.top, isRegionTile ? 5 : 1)
+                    .padding(.top, isRegionTile ? 3 : 1)
             }
         }
         .background {
@@ -206,15 +217,21 @@ final class CaptureModeSelector: NSStackView {
         spacing = isAreaSelector ? 0 : 2
         distribution = .fillEqually
         wantsLayer = true
-        layer?.cornerRadius = isAreaSelector ? 0 : 28
+        layer?.cornerRadius = isAreaSelector ? 0 : 22
         layer?.borderWidth = isAreaSelector ? 0 : 1
-        selection.cornerRadius = isAreaSelector ? 7 : 23
+        selection.cornerRadius = isAreaSelector ? 7 : 19
         layer?.insertSublayer(selection, at: 0)
         setAccessibilityElement(true)
         setAccessibilityRole(.radioGroup)
         setAccessibilityLabel(isAreaSelector ? "Area selection mode" : "Capture mode")
         for button in buttons {
             button.drawsSelection = false
+            if !isAreaSelector {
+                button.showsPressEffect = false
+                button.showSelectionFocus = { [weak selection] focused in
+                    selection?.borderWidth = focused ? 2 : 0
+                }
+            }
             button.setAccessibilityRole(.radioButton)
             addArrangedSubview(button)
         }
@@ -231,6 +248,9 @@ final class CaptureModeSelector: NSStackView {
         selectedButton?.setAccessibilityValue(0)
         button.state = .on
         button.setAccessibilityValue(1)
+        if let selectedButton, window?.firstResponder === selectedButton {
+            window?.makeFirstResponder(button)
+        }
         selectedButton = button
         positionSelection(animated: shouldAnimate)
     }
@@ -248,6 +268,7 @@ final class CaptureModeSelector: NSStackView {
     private func updateSelectionColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             selection.backgroundColor = NSColor.labelColor.withAlphaComponent(0.075).cgColor
+            selection.borderColor = NSColor.labelColor.withAlphaComponent(0.72).cgColor
             layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
         }
     }

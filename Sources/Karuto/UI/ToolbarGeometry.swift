@@ -1,5 +1,17 @@
 import CoreGraphics
 
+enum ToolbarScale {
+    static let range = 0.25...4.0
+
+    static let tickCount = 9
+
+    static func snapped(_ value: Double) -> Double {
+        guard value.isFinite else { return 1 }
+        let bounded = min(range.upperBound, max(range.lowerBound, value))
+        return exp2((log2(bounded) * 2).rounded() / 2)
+    }
+}
+
 /// Toolbar and menu placement use global AppKit points (bottom-left origin).
 enum ToolbarGeometry {
     struct MenuPlacement: Equatable {

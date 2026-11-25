@@ -10,6 +10,7 @@ final class AreaAnnotationEditor: NSObject {
     var ocrEnabled = false { didSet { syncButtons() } }
     var onSelectTool: ((AnnotationTool) -> Void)?
     var presentMenu: ((NSMenu, NSButton) -> Void)?
+    var onPaletteResize: (() -> Void)?
     private(set) var tool = AnnotationTool.select
     private var color = AnnotationColor.red
     private(set) var marks: [AreaAnnotation] = []
@@ -35,12 +36,18 @@ final class AreaAnnotationEditor: NSObject {
     private var grid: CGImage?
     private var sampling: Task<Void, Never>?
     private var palette: CapturePanel?
+    private weak var paletteGrip: CaptureToolbarView?
+    private let settings: AppSettings?
+    private var paletteScale: Double
+    private var paletteScreen: CGRect?
+    private var captureToolbarFrame = CGRect.null
     private var movedPalette = false
     private var buttons: [AnnotationTool: CaptureActionButton] = [:]
     private var ocrButton: CaptureActionButton?
     private var undoButton: CaptureActionButton?
     private var redoButton: CaptureActionButton?
     private var colorButton: CaptureActionButton?
+    private var sizeButton: CaptureActionButton?
     private var textEditor: AnnotationTextEditor?
     private var textStyle = AnnotationTextStyle()
     private var selectedText: Int?
@@ -64,7 +71,9 @@ final class AreaAnnotationEditor: NSObject {
         return palette.frame.contains(point)
     }
 
-    override init() {
+    init(settings: AppSettings? = nil) {
+        self.settings = settings
+        paletteScale = settings?.annotationPaletteScale ?? 1
         super.init()
         canvas.masksToBounds = true
         boxOutline.masksToBounds = true
@@ -106,9 +115,13 @@ final class AreaAnnotationEditor: NSObject {
         guard let toolbar else { return }
         let panel = palette ?? makePalette()
         let visible = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.id }?.visibleFrame ?? display.frame
-        let frame = ToolbarGeometry.paletteFrame(size: panel.frame.size, selection: rect, screen: visible, toolbar: toolbar)
-        if (changed || !movedPalette), frame.origin != panel.frame.origin { panel.setFrameOrigin(frame.origin) }
+        captureToolbarFrame = toolbar
+        if paletteScreen != visible || (changed && movedPalette) {
+            resizePalette(within: visible)
+        }
         if changed { movedPalette = false }
+        paletteScreen = visible
+        positionPalette()
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
@@ -139,6 +152,7 @@ final class AreaAnnotationEditor: NSObject {
         canvas.sublayers = nil
         canvas.removeFromSuperlayer()
         target = nil
+        paletteScreen = nil
         movedPalette = false
         if tool != .select { onSelectTool?(.select) }
         tool = .select
@@ -389,17 +403,22 @@ final class AreaAnnotationEditor: NSObject {
         colorButton = button("Ink color", "circle.fill") { [weak self] in self?.chooseColor() }
         undoButton = button("Undo annotation", "arrow.uturn.backward") { [weak self] in self?.undo() }
         redoButton = button("Redo annotation", "arrow.uturn.forward") { [weak self] in self?.redo() }
+        sizeButton = button("Annotation palette size", "slider.horizontal.3") { [weak self] in self?.choosePaletteSize() }
         _ = button("Capture", "checkmark") { [weak self] in self?.onConfirm?() }
         let grip = CaptureToolbarView(frame: .zero)
         grip.onMove = { [weak self] _ in self?.movedPalette = true }
-        pinSubview(grip, to: surface.contentView)
-        pinSubview(stack, to: grip, inset: 6)
         let width = CGFloat(stack.arrangedSubviews.count) * 29 + 9
-        let panel = CapturePanel(contentRect: CGRect(x: 0, y: 0, width: width, height: 38),
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: width, height: 38))
+        pinSubview(stack, to: content, inset: 6)
+        grip.installContent(content)
+        pinSubview(grip, to: surface.contentView)
+        let panel = CapturePanel(contentRect: content.frame,
                                  level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 4))
+        panel.contentMinSize = .zero
         panel.contentView = surface
         panel.setAccessibilityLabel("Area annotation tools")
         palette = panel
+        paletteGrip = grip
         syncButtons()
         return panel
     }
@@ -417,6 +436,36 @@ final class AreaAnnotationEditor: NSObject {
         colorButton?.isEnabled = !ocrEnabled
         colorButton?.contentTintColor = NSColor(cgColor: color.cgColor)
         colorButton?.setAccessibilityValue(color.rawValue.capitalized)
+    }
+
+    private func choosePaletteSize() {
+        guard let sizeButton else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let item = menu.addItem(withTitle: "Annotation palette size", action: nil, keyEquivalent: "")
+        item.view = ToolbarSizeMenuView(title: item.title, scale: paletteScale) { [weak self] scale in
+            guard let self, paletteScale != scale, let paletteScreen else { return }
+            paletteScale = scale
+            settings?.annotationPaletteScale = scale
+            let screen = movedPalette ? palette?.screen?.visibleFrame ?? paletteScreen : paletteScreen
+            resizePalette(within: screen)
+            positionPalette()
+            positionTextEditor()
+            onPaletteResize?()
+        }
+        presentMenu?(menu, sizeButton)
+    }
+
+    private func resizePalette(within screen: CGRect) {
+        (palette?.contentView as? CaptureSurface)?.cornerRadius = 11 * paletteScale
+        paletteGrip?.resize(to: paletteScale, within: screen)
+    }
+
+    private func positionPalette() {
+        guard !movedPalette, let palette, let paletteScreen else { return }
+        let frame = ToolbarGeometry.paletteFrame(size: palette.frame.size, selection: rect, screen: paletteScreen,
+                                                toolbar: captureToolbarFrame)
+        if frame.origin != palette.frame.origin { palette.setFrameOrigin(frame.origin) }
     }
 
     private func chooseColor() {

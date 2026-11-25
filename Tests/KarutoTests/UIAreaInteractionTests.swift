@@ -587,14 +587,17 @@ struct UIAreaInteractionTests {
         var sourceChanges = 0
         fixture.controller.onSelectionSourceChange = { _ in sourceChanges += 1 }
         let menu = fixture.controller.makeOptionsMenu()
-        #expect(menu.items.filter { $0.action != nil }.map(\.title) == ["Instant Capture", "Freeze Display During Capture", "Keyboard Shortcuts…", "Settings…"])
-        #expect(menu.items.dropFirst().prefix(2).map(\.state) == [.on, .off])
-        menu.performActionForItem(at: 1)
-        menu.performActionForItem(at: 2)
+        #expect(menu.items.filter { $0.action != nil }.map(\.title) == ["Instant Capture", "Annotate after selection", "Freeze Display During Capture", "Keyboard Shortcuts…", "Settings…"])
+        #expect(menu.item(withTitle: "Instant Capture")?.state == .on)
+        #expect(menu.item(withTitle: "Freeze Display During Capture")?.state == .off)
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Instant Capture"))
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Freeze Display During Capture"))
         #expect(sourceChanges == 1)
         #expect(!fixture.controller.instantCapture)
         #expect(fixture.controller.freezeDisplay)
-        #expect(fixture.controller.makeOptionsMenu().items.dropFirst().prefix(2).map(\.state) == [.off, .on])
+        let updated = fixture.controller.makeOptionsMenu()
+        #expect(updated.item(withTitle: "Instant Capture")?.state == .off)
+        #expect(updated.item(withTitle: "Freeze Display During Capture")?.state == .on)
     }
 
     @Test func overlayActionsAndMenuNavigationStayDistinct() {
@@ -611,8 +614,8 @@ struct UIAreaInteractionTests {
         #expect(fixture.controller.handleShortcut(.toggleFreezeDisplay))
         #expect(sourceChanges == 1)
         let menu = fixture.controller.makeOptionsMenu()
-        menu.performActionForItem(at: 4)
-        menu.performActionForItem(at: 5)
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Keyboard Shortcuts…"))
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Settings…"))
         #expect(openedKeymap == 1)
         #expect(openedPreferences == 1)
         #expect(fixture.controller.handleShortcut(.windowMode))

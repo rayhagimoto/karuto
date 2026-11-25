@@ -4,6 +4,110 @@ import Testing
 
 @MainActor
 struct UICursorTests {
+    @Test func sizeSliderScalesLiveAcrossLogarithmicMarksAndRemembersTheSetting() throws {
+        _ = NSApplication.shared
+        let suite = "KarutoToolbarTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(1.12, forKey: "captureToolbarScale") // A size saved before the slider had stops.
+        let settings = AppSettings(defaults: defaults)
+        let controller = CaptureUIController(settings: settings)
+        let display = CaptureDisplay(id: 75, name: "Toolbar size", frame: CGRect(x: 0, y: 0, width: 1000, height: 700), scale: 1)
+        let catalog = CaptureCatalog(displays: [display], windows: [])
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        controller.present(catalog: catalog)
+        defer { controller.dismiss() }
+        let root = try #require(NSApp.windows.first { !existing.contains(ObjectIdentifier($0)) && $0.contentView is CaptureToolbarView }?.contentView as? CaptureToolbarView)
+        root.layoutSubtreeIfNeeded()
+        let area = try #require(descendants(root).first { $0.accessibilityLabel() == "Area" })
+        let originalSize = area.convert(area.bounds, to: root).size
+        #expect(originalSize == CGSize(width: 52, height: 44))
+        let menu = controller.makeOptionsMenu()
+        let control = try #require(menu.item(withTitle: "Toolbar size")?.view)
+        let slider = try #require(control.subviews.compactMap { $0 as? NSSlider }.first)
+        #expect(slider.doubleValue == 0 && slider.isContinuous)
+        #expect(slider.minValue == -2 && slider.maxValue == 2)
+        #expect(slider.numberOfTickMarks == 9 && slider.allowsTickMarkValuesOnly)
+        let marks = control.subviews.compactMap { $0 as? NSTextField }.suffix(5)
+        #expect(marks.map(\.stringValue) == ["¼×", "½×", "1×", "2×", "4×"])
+        let scroll = try #require(area.enclosingScrollView)
+        for exponent in [-2.0, -1.55, -0.98, -0.3, 0, 0.24, 0.26, 1.21, 1.3, 2] {
+            slider.doubleValue = exponent
+            #expect(slider.sendAction(slider.action, to: slider.target))
+            root.layoutSubtreeIfNeeded()
+            let stop = (exponent * 2).rounded() / 2
+            let scale = exp2(stop)
+            #expect(slider.doubleValue == stop)
+            #expect(abs(area.convert(area.bounds, to: root).width - originalSize.width * scale) < 0.01)
+            #expect(settings.captureToolbarScale == scale)
+            #expect(settings.annotationPaletteScale == 1)
+            if exponent == -2 {
+                #expect(!scroll.hasHorizontalScroller && !scroll.hasVerticalScroller)
+                #expect(root.bounds.contains(area.convert(area.bounds, to: root)))
+                let center = area.convert(CGPoint(x: area.bounds.midX, y: area.bounds.midY), to: root)
+                #expect(root.hitTest(center) === area)
+            }
+        }
+        root.resize(to: 4, within: display.frame)
+        #expect(scroll.hasHorizontalScroller)
+        let options = try #require(descendants(root).first { $0.accessibilityLabel() == "Capture options" })
+        options.scrollToVisible(options.bounds)
+        #expect(root.bounds.contains(options.convert(options.bounds, to: root)))
+        let center = options.convert(CGPoint(x: options.bounds.midX, y: options.bounds.midY), to: root)
+        #expect(root.hitTest(center) === options)
+        controller.dismiss()
+        let reopened = CaptureUIController(settings: AppSettings(defaults: defaults))
+        reopened.present(catalog: catalog)
+        defer { reopened.dismiss() }
+        let restored = try #require(reopened.makeOptionsMenu().item(withTitle: "Toolbar size")?.view)
+        #expect(restored.subviews.compactMap { $0 as? NSSlider }.first?.doubleValue == 2)
+    }
+
+    @Test func annotationPaletteResizesIndependentlyAndRestoresItsStop() throws {
+        _ = NSApplication.shared
+        let suite = "KarutoPaletteTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.captureToolbarScale = 2
+        let display = CaptureDisplay(id: 75, name: "Palette", frame: CGRect(x: 0, y: 0, width: 1000, height: 700), scale: 2)
+        let selection = CGRect(x: 200, y: 250, width: 450, height: 200)
+        func open(_ editor: AreaAnnotationEditor) throws -> (NSSlider, NSButton) {
+            editor.show(for: display, rect: selection, in: CALayer(), avoiding: CGRect(x: 0, y: 0, width: 400, height: 50))
+            let panel = try #require(NSApp.windows.first(where: editor.isPaletteWindow))
+            let root = try #require(panel.contentView)
+            let button = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "Annotation palette size" })
+            var menu: NSMenu?
+            editor.presentMenu = { shown, _ in menu = shown }
+            button.performClick(nil)
+            let view = try #require(menu?.item(withTitle: "Annotation palette size")?.view)
+            let slider = try #require(view.subviews.compactMap { $0 as? NSSlider }.first)
+            return (slider, button)
+        }
+        let editor = AreaAnnotationEditor(settings: settings)
+        defer { editor.clear() }
+        let (slider, button) = try open(editor)
+        let scroll = try #require(button.enclosingScrollView)
+        #expect(slider.doubleValue == 0 && slider.numberOfTickMarks == 9 && slider.allowsTickMarkValuesOnly)
+        for (input, stop) in [(-2.0, -2.0), (1.8, 2.0), (0.3, 0.5)] {
+            slider.doubleValue = input
+            #expect(slider.sendAction(slider.action, to: slider.target))
+            #expect(slider.doubleValue == stop)
+            #expect(abs(scroll.magnification - exp2(stop)) < 0.00001)
+            #expect(abs(button.convert(button.bounds, to: nil).width - 26 * exp2(stop)) < 0.01)
+            #expect(scroll.hasHorizontalScroller == (stop == 2))
+            #expect(display.frame.contains(try #require(editor.visiblePaletteFrame)))
+            #expect(settings.captureToolbarScale == 2)
+        }
+        editor.clear()
+        let reopened = AreaAnnotationEditor(settings: AppSettings(defaults: defaults))
+        defer { reopened.clear() }
+        let (restored, restoredButton) = try open(reopened)
+        #expect(restored.doubleValue == 0.5)
+        let restoredScroll = try #require(restoredButton.enclosingScrollView)
+        #expect(abs(restoredScroll.magnification - sqrt(2)) < 0.00001)
+    }
+
     @Test func toolbarModeButtonsAndTimerMenuStayInSync() throws {
         _ = NSApplication.shared
         let pointer = NSEvent.mouseLocation
@@ -25,7 +129,8 @@ struct UICursorTests {
         #expect(timer.symbolName == "clock")
         #expect(timer.accessibilityValue() as? String == "Off")
         #expect(snapshot.accessibilityValue() as? Int == 1)
-        #expect(snapshot.frame.width >= recording.intrinsicContentSize.width)
+        #expect(buttons.allSatisfy { $0.frame.size == NSSize(width: 52, height: 44) })
+        #expect(timer.frame.size == NSSize(width: 34, height: 32))
         let highlight = try #require(selector.layer?.sublayers?.first { $0.backgroundColor != nil })
         #expect(highlight.frame == snapshot.frame.insetBy(dx: 3, dy: 3))
 
@@ -71,8 +176,19 @@ struct UICursorTests {
         func focused() -> String? { (panel.firstResponder as? NSButton)?.accessibilityLabel() }
         try key(48)
         #expect(focused() == "Snapshot")
+        let selector = try #require(descendants(panel.contentView).compactMap { $0 as? CaptureModeSelector }
+            .first { $0.accessibilityLabel() == "Capture mode" })
+        let indicator = try #require(selector.layer?.sublayers?.first { $0.backgroundColor != nil })
+        #expect(indicator.borderWidth > 0)
+        #expect(controller.handleShortcut(.recordingMode))
+        #expect(focused() == CaptureMode.screenRecording.title)
+        #expect(indicator.borderWidth > 0)
+        try key(123)
+        #expect(controller.mode == .snapshot)
+        #expect(focused() == "Snapshot")
         try key(48)
         #expect(focused() == "Area")
+        #expect(indicator.borderWidth == 0)
         try key(124)
         #expect(focused() == "Fullscreen")
         #expect(controller.selectedRegion == .fullscreen)
@@ -129,8 +245,8 @@ struct UICursorTests {
             try #require(buttons.first { $0.accessibilityLabel() == label })
         }
         panel.contentView?.layoutSubtreeIfNeeded()
-        #expect(regions.allSatisfy { $0.isRegionTile && $0.frame.size == NSSize(width: 70, height: 56) })
-        #expect(regions.map { $0.frame.minX } == [0, 70, 140, 210])
+        #expect(regions.allSatisfy { $0.isRegionTile && $0.frame.size == NSSize(width: 52, height: 44) })
+        #expect(regions.map { $0.frame.minX } == [0, 52, 104, 156])
         let regionSelector = try #require(descendants(panel.contentView).compactMap { $0 as? CaptureModeSelector }
             .first { $0.accessibilityLabel() == "Area selection mode" })
         let regionHighlight = try #require(regionSelector.layer?.sublayers?.first { $0.backgroundColor != nil })

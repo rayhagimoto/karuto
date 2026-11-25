@@ -50,6 +50,14 @@ final class AppSettings {
         get { defaults.object(forKey: "autoCopyScreenshots") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "autoCopyScreenshots") }
     }
+    var captureToolbarScale: Double {
+        get { ToolbarScale.snapped(defaults.object(forKey: "captureToolbarScale") as? Double ?? 1) }
+        set { defaults.set(ToolbarScale.snapped(newValue), forKey: "captureToolbarScale") }
+    }
+    var annotationPaletteScale: Double {
+        get { ToolbarScale.snapped(defaults.object(forKey: "annotationPaletteScale") as? Double ?? 1) }
+        set { defaults.set(ToolbarScale.snapped(newValue), forKey: "annotationPaletteScale") }
+    }
     var previewAutoDismiss: Bool {
         get { defaults.bool(forKey: "previewAutoDismiss") }
         set { defaults.set(newValue, forKey: "previewAutoDismiss") }
