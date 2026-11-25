@@ -86,6 +86,29 @@ struct UICursorTests {
         #expect(focused() == "Fullscreen")
     }
 
+    @Test func arrowKeysSelectAreaModesWhenToolbarOpens() throws {
+        _ = NSApplication.shared
+        let display = CaptureDisplay(id: 75, name: "Arrow keys", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
+        let controller = CaptureUIController()
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        controller.present(catalog: CaptureCatalog(displays: [display], windows: []))
+        defer { controller.dismiss() }
+        let panel = try #require(NSApp.windows.first { $0.contentView is CaptureToolbarView && !existing.contains(ObjectIdentifier($0)) })
+        func key(_ code: UInt16) throws {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: panel.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: code))
+            #expect(controller.handleKeyEvent(event))
+        }
+        #expect(controller.selectedRegion == .area)
+        try key(124)
+        #expect(controller.selectedRegion == .fullscreen)
+        try key(123)
+        #expect(controller.selectedRegion == .area)
+        try key(123)
+        #expect(controller.selectedRegion == .scrolling)
+    }
+
     @Test func toolbarShowsOverlayBindingsAndRefreshesWhenChanged() throws {
         _ = NSApplication.shared
         let display = CaptureDisplay(id: 74, name: "Shortcuts", frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
@@ -108,6 +131,13 @@ struct UICursorTests {
         panel.contentView?.layoutSubtreeIfNeeded()
         #expect(regions.allSatisfy { $0.isRegionTile && $0.frame.size == NSSize(width: 70, height: 56) })
         #expect(regions.map { $0.frame.minX } == [0, 70, 140, 210])
+        let regionSelector = try #require(descendants(panel.contentView).compactMap { $0 as? CaptureModeSelector }
+            .first { $0.accessibilityLabel() == "Area selection mode" })
+        let regionHighlight = try #require(regionSelector.layer?.sublayers?.first { $0.backgroundColor != nil })
+        #expect(regionHighlight.frame == area.frame)
+        #expect(controller.handleShortcut(.windowMode))
+        #expect(regionHighlight.frame == window.frame)
+        #expect(window.accessibilityValue() as? Int == 1)
         #expect(area.shortcut == keymap.configuration.binding(for: .areaMode)?.displayString)
         #expect(window.shortcut == nil)
         try keymap.update(action: .areaMode, binding: ShortcutBinding(keyCode: 19, modifiers: .shift))
