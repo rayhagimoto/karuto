@@ -59,7 +59,6 @@ final class CaptureUIController: NSObject {
         if capturesText { return "Copy All Text" }
         return mode == .screenRecording || region == .scrolling ? "Continue" : "Capture"
     }
-    private var annotateButton: CaptureToolbarButton?
     var selectedRegion: CaptureRegion { region }
     private var menuIsTracking = false
     private var pendingSourceChange = false
@@ -86,7 +85,6 @@ final class CaptureUIController: NSObject {
     private var toolbarRevealTask: Task<Void, Never>?
     private var lastToolbarFrame: CGRect?
     private var regionButtons: [CaptureRegion: CaptureToolbarButton] = [:]
-    private var recallButton: CaptureToolbarButton?
     private let sizeControl = SelectionSizeControl()
     private var modeControl: CaptureModeSelector?
     private var timerControl: CaptureToolbarButton?
@@ -266,12 +264,10 @@ final class CaptureUIController: NSObject {
         overlays.forEach { $0.cancelInteraction(); $0.releaseFrozenFrame(); $0.controller = nil }
         overlays.removeAll()
         regionButtons.removeAll()
-        recallButton = nil
         focusGroups.removeAll()
         shortcutButtons.removeAll()
         modeControl = nil
         timerControl = nil
-        annotateButton = nil
         hint = nil
         NSCursor.arrow.set()
     }
@@ -647,9 +643,6 @@ final class CaptureUIController: NSObject {
     }
 
     private func updateToolbar() {
-        recallButton?.isEnabled = mode == .snapshot && validPreviousArea != nil
-        annotateButton?.isEnabled = (mode == .snapshot && region == .area && instantCapture && !capturesText)
-        annotateButton?.state = stageAreaForEditing ? .on : .off
         let confirmation = keymap?.configuration.binding(for: .confirmCapture).map { "\($0.displayString) to \(confirmTitle.lowercased())" }
             ?? "Choose \(confirmTitle) in Capture options"
         var shortcuts: [String] = []
@@ -695,9 +688,9 @@ final class CaptureUIController: NSObject {
     }
 
     private func makeToolbar(on display: CaptureDisplay) {
-        let dividerPadding: CGFloat = 4
-        let width = min(486 + 6 * dividerPadding, display.frame.width - 16)
-        let panel = CapturePanel(contentRect: CGRect(x: display.frame.midX - width / 2, y: display.frame.minY + 55, width: width, height: 66), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
+        let dividerPadding: CGFloat = 8
+        let width = min(606, display.frame.width - 16)
+        let panel = CapturePanel(contentRect: CGRect(x: display.frame.midX - width / 2, y: display.frame.minY + 55, width: width, height: 90), level: NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3))
         let visibleFrame = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.id })?.visibleFrame ?? display.frame
         if let previous = lastToolbarFrame, display.frame.contains(CGPoint(x: previous.midX, y: previous.midY)) {
             panel.setFrame(ToolbarGeometry.clamped(CGRect(origin: previous.origin, size: panel.frame.size), to: visibleFrame), display: false)
@@ -705,6 +698,7 @@ final class CaptureUIController: NSObject {
             panel.setFrame(ToolbarGeometry.clamped(panel.frame, to: visibleFrame), display: false)
         }
         let root = CaptureToolbarView(frame: NSRect(origin: .zero, size: panel.contentRect(forFrameRect: panel.frame).size))
+        root.appearance = NSAppearance(named: .darkAqua)
         root.autoresizingMask = [.width, .height]
         root.setAccessibilityElement(true)
         root.setAccessibilityRole(.group)
@@ -717,14 +711,18 @@ final class CaptureUIController: NSObject {
         panel.contentView = root
         panel.initialFirstResponder = root
         let surface = SettingsGlassSurface()
-        pinSubview(surface, to: root)
+        surface.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(surface)
+        surface.content.wantsLayer = true
+        surface.content.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        surface.content.layer?.cornerRadius = 20
         let row = NSStackView()
         row.spacing = 3
         row.alignment = .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
         surface.content.addSubview(row)
 
-        func divider() {
+        func divider(extraTrailing: CGFloat = 0) {
             let line = NSBox()
             line.boxType = .separator
             let gap = row.spacing + dividerPadding
@@ -732,14 +730,16 @@ final class CaptureUIController: NSObject {
                 row.setCustomSpacing(gap, after: previous)
             }
             row.addArrangedSubview(line)
-            row.setCustomSpacing(gap, after: line)
+            row.setCustomSpacing(gap + extraTrailing, after: line)
             line.widthAnchor.constraint(equalToConstant: 1).isActive = true
-            line.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            line.heightAnchor.constraint(equalToConstant: 44).isActive = true
         }
         let modes = CaptureMode.allCases.map { mode in
             let button = CaptureToolbarButton(mode.title, symbol: mode == .snapshot ? "camera" : "record.circle") { [weak self] in
                 self?.setMode(mode)
             }
+            button.isRegionTile = true
+            button.widthAnchor.constraint(equalToConstant: 70).isActive = true
             shortcutButtons[mode == .snapshot ? .snapshotMode : .recordingMode] = button
             return button
         }
@@ -749,75 +749,74 @@ final class CaptureUIController: NSObject {
         divider()
         let regions: [(CaptureRegion, String, ShortcutAction)] = [
             (.area, "viewfinder", .areaMode), (.fullscreen, "display", .fullscreenMode),
-            (.window, "macwindow", .windowMode), (.scrolling, "computermouse", .scrollingMode)
+            (.window, "macwindow", .windowMode), (.scrolling, "doc.text", .scrollingMode)
         ]
+        let regionRow = NSStackView()
+        regionRow.spacing = 0
+        regionRow.alignment = .centerY
+        regionRow.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        row.addArrangedSubview(regionRow)
         var choices: [CaptureToolbarButton] = []
         for (region, symbol, action) in regions {
             let button = CaptureToolbarButton(region.title, symbol: symbol) { [weak self] in self?.setRegion(region) }
+            button.isRegionTile = true
             button.setAccessibilityRole(.radioButton)
-            row.addArrangedSubview(button)
+            regionRow.addArrangedSubview(button)
+            button.widthAnchor.constraint(equalToConstant: 70).isActive = true
             regionButtons[region] = button
             shortcutButtons[action] = button
             choices.append(button)
-            if region == .fullscreen {
-                let recall = CaptureToolbarButton("Select Last Capture Region", symbol: "arrow.uturn.backward.square") { [weak self] in
-                    self?.handleShortcut(.selectLastArea)
-                }
-                recall.drawsSelection = false
-                row.addArrangedSubview(recall)
-                choices.append(recall)
-                recallButton = recall
-                shortcutButtons[.selectLastArea] = recall
-            }
         }
-        divider()
+        divider(extraTrailing: 12)
         let timer = CaptureToolbarButton("Capture timer", symbol: "clock")
         timer.handler = { [weak self, weak timer] in
             guard let self, let timer else { return }
             showMenu(makeTimerMenu(), from: timer)
         }
         timerControl = timer
-        let annotate = CaptureToolbarButton("Annotate", symbol: "pencil", checked: true) { [weak self] in
-            guard let self else { return }
-            stageAreaForEditing.toggle()
-            refreshSelection()
-        }
-        annotate.focusHint = "Keep this area open for annotation after dragging."
-        annotateButton = annotate
         let options = CaptureToolbarButton("Capture options", symbol: "gearshape")
         options.handler = { [weak self, weak options] in
             guard let self, let options else { return }
             showMenu(makeOptionsMenu(), from: options)
         }
-        let tools = [timer, annotate, options]
+        let tools = [timer, options]
         tools.forEach { row.addArrangedSubview($0) }
-        divider()
         let cancel = CaptureToolbarButton("Cancel", symbol: "xmark") { [weak self] in self?.cancel() }
         row.addArrangedSubview(cancel)
         shortcutButtons[.cancelCapture] = cancel
-        focusGroups = [modes, choices, tools, [cancel]]
+        focusGroups = [modes, choices, tools + [cancel]]
         let message = captureLabel("", size: 11)
         message.alignment = .center
         message.lineBreakMode = .byTruncatingTail
         message.translatesAutoresizingMaskIntoConstraints = false
-        surface.content.addSubview(message)
+        root.addSubview(message)
+        message.textColor = .white
+        message.wantsLayer = true
+        message.layer?.shadowColor = NSColor.black.cgColor
+        message.layer?.shadowOpacity = 0.8
+        message.layer?.shadowRadius = 3
+        message.layer?.shadowOffset = .zero
         hint = message
         for button in focusGroups.joined() {
             button.focusChanged = { [weak message, weak button] in
                 message?.stringValue = button?.focusHint ?? ""
             }
-            if button !== cancel {
-                button.widthAnchor.constraint(equalTo: cancel.widthAnchor).isActive = true
+            if !button.isRegionTile {
+                button.widthAnchor.constraint(equalToConstant: 34).isActive = true
             }
-            button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+            button.heightAnchor.constraint(equalToConstant: button.isRegionTile ? 56 : 32).isActive = true
         }
         NSLayoutConstraint.activate([
+            surface.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: root.topAnchor),
+            surface.heightAnchor.constraint(equalToConstant: 70),
             row.leadingAnchor.constraint(equalTo: surface.content.leadingAnchor, constant: 10),
             row.trailingAnchor.constraint(equalTo: surface.content.trailingAnchor, constant: -10),
             row.topAnchor.constraint(equalTo: surface.content.topAnchor, constant: 7),
-            message.topAnchor.constraint(equalTo: row.bottomAnchor, constant: 4),
-            message.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            message.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+            message.topAnchor.constraint(equalTo: surface.bottomAnchor, constant: 4),
+            message.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+            message.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10)
         ])
         updateShortcutHints()
         toolbar = panel
@@ -831,6 +830,7 @@ final class CaptureUIController: NSObject {
     private func updateShortcutHints() {
         for (action, button) in shortcutButtons {
             button.focusHint = shortcutLabel(button.accessibilityLabel() ?? action.title, action: action)
+            button.shortcut = keymap?.configuration.binding(for: action)?.displayString
         }
     }
 
@@ -988,6 +988,11 @@ final class CaptureUIController: NSObject {
         item.keyEquivalentModifierMask = binding.modifierFlags
     }
 
+    @objc private func toggleAnnotation(_ sender: NSMenuItem) {
+        stageAreaForEditing.toggle()
+        refreshSelection()
+    }
+
     func makeOptionsMenu() -> NSMenu {
         let menu = NSMenu(title: "Capture options")
         menu.font = .systemFont(ofSize: 14)
@@ -1002,6 +1007,11 @@ final class CaptureUIController: NSObject {
         instant.toolTip = "Continue on mouse release, or turn off to adjust the area and \(confirmInstruction)."
         assignShortcut(.toggleInstantCapture, to: instant)
         menu.addItem(instant)
+        let annotate = NSMenuItem(title: "Annotate after selection", action: #selector(toggleAnnotation(_:)), keyEquivalent: "")
+        annotate.target = self
+        annotate.state = stageAreaForEditing ? .on : .off
+        annotate.isEnabled = mode == .snapshot && region == .area && instantCapture && !capturesText
+        menu.addItem(annotate)
         let freeze = NSMenuItem(title: "Freeze Display During Capture", action: #selector(toggleFreezeDisplay(_:)), keyEquivalent: "")
         freeze.target = self
         freeze.state = freezeDisplay ? .on : .off

@@ -49,6 +49,8 @@ final class CaptureToolbarButton: ClosureButton {
     var focusHint: String
     var focusChanged: (() -> Void)?
     var symbolName: String { didSet { if oldValue != symbolName { updateGlyph() } } }
+    var shortcut: String? { didSet { if oldValue != shortcut { updateGlyph() } } }
+    var isRegionTile = false { didSet { if oldValue != isRegionTile { updateGlyph() } } }
     var drawsSelection = true
     private var keyboardFocused = false
     override var state: NSControl.StateValue { didSet { if oldValue != state { updateGlyph() } } }
@@ -81,7 +83,7 @@ final class CaptureToolbarButton: ClosureButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func updateGlyph() {
-        glyph.rootView = ToolbarGlyph(symbol: symbolName,
+        glyph.rootView = ToolbarGlyph(symbol: symbolName, shortcut: shortcut, isRegionTile: isRegionTile,
                                       selected: state == .on, drawsSelection: drawsSelection, checked: showsCheckmark && state == .on,
                                       enabled: isEnabled, highlighted: isHighlighted, focused: keyboardFocused,
                                       dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
@@ -116,6 +118,8 @@ final class CaptureToolbarButton: ClosureButton {
 
 private struct ToolbarGlyph: View {
     var symbol: String
+    var shortcut: String? = nil
+    var isRegionTile = false
     var selected = false
     var drawsSelection = true
     var checked = false
@@ -135,7 +139,7 @@ private struct ToolbarGlyph: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 17, weight: .regular))
+            .font(.system(size: isRegionTile ? 25 : 17, weight: .regular))
             .overlay(alignment: .bottomTrailing) {
                 if checked {
                     Image(systemName: "checkmark.circle.fill")
@@ -152,8 +156,26 @@ private struct ToolbarGlyph: View {
                         .offset(x: 9)
                 }
             }
+            .overlay(alignment: .bottom) {
+                if isRegionTile && symbol == "doc.text" {
+                    Image(systemName: "arrow.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .offset(y: 7)
+                }
+            }
         .foregroundStyle(ink.opacity(selected || focused ? 1 : 0.78))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            if let shortcut {
+                Text(shortcut)
+                    .font(.system(size: isRegionTile ? 10 : 8, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .foregroundStyle(ink.opacity(0.25))
+                    .padding(.leading, isRegionTile ? 7 : 2)
+                    .padding(.top, isRegionTile ? 5 : 1)
+            }
+        }
         .background {
             RoundedRectangle(cornerRadius: 7)
                 .fill(ink.opacity(tileOpacity))
@@ -180,7 +202,9 @@ final class CaptureModeSelector: NSStackView {
         spacing = 2
         distribution = .fillEqually
         wantsLayer = true
-        selection.cornerRadius = 7
+        layer?.cornerRadius = 28
+        layer?.borderWidth = 1
+        selection.cornerRadius = 23
         layer?.insertSublayer(selection, at: 0)
         setAccessibilityElement(true)
         setAccessibilityRole(.radioGroup)
@@ -220,16 +244,19 @@ final class CaptureModeSelector: NSStackView {
     private func updateSelectionColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             selection.backgroundColor = NSColor.labelColor.withAlphaComponent(0.075).cgColor
+            layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
         }
     }
 
     private func positionSelection(animated: Bool) {
-        guard let button = selectedButton, selection.frame != button.frame else { return }
+        guard let button = selectedButton else { return }
+        let targetFrame = button.frame.insetBy(dx: 3, dy: 3)
+        guard selection.frame != targetFrame else { return }
         let previous = selection.animation(forKey: "position") == nil
             ? selection.position : selection.presentation()?.position ?? selection.position
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        selection.frame = button.frame
+        selection.frame = targetFrame
         CATransaction.commit()
         if animated {
             let slide = CABasicAnimation(keyPath: "position")
